@@ -1,0 +1,41 @@
+import {identity,headers as deviceHeaders,wsProof,approve} from './identity-helper.mjs';
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {EventEmitter,once} from 'node:events';
+import {mkdtempSync,readFileSync,mkdirSync} from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import {WebSocket} from 'ws';
+import {Accounts} from '../src/accounts.mjs';
+import {startServer} from '../src/server.mjs';
+class Rpc extends EventEmitter{async start(){}async close(){this.emit('disconnected');}}
+const password='a-long-private-test-passphrase';const key=identity();
+test('password login is required; password reset invalidates HTTP and live sockets, including after restart',async t=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'codex-account-')),workspace=path.join(dir,'workspace');mkdirSync(workspace);const dataDir=path.join(dir,'state');
+ let server=await startServer({port:0,dataDir,roots:[workspace],rpc:new Rpc()});t.after(()=>server.close());
+ const call=async(route,{body,token,headers={}}={})=>{if(route==='/api/login')body={...body,publicKey:key.publicKey};const method=body?'POST':'GET';const proof=deviceHeaders(key,server.address,method,route,body?Buffer.from(JSON.stringify(body)):Buffer.alloc(0),token||'');const r=await fetch(server.address+route,{method,headers:{...proof,...(body?{'content-type':'application/json'}:{}),...(token?{authorization:'Bearer '+token}:{}),...headers},body:body?JSON.stringify(body):undefined});return{status:r.status,data:await r.json()};};
+ assert.equal((await call('/api/pair',{body:{code:'12345678'}})).status,410);
+ assert.equal((await call('/api/login',{body:{username:'owner',password}})).status,503);
+ const accounts=new Accounts(dataDir);await accounts.set('owner',password);
+ const persisted=readFileSync(accounts.file,'utf8');assert.equal(persisted.includes(password),false);assert.equal(accounts.current().algorithm,'scrypt-v1');
+ assert.equal((await call('/api/login',{body:{username:'owner',password:'wrong'}})).status,401);
+ approve(server,key,accounts.current().generation);const login=await call('/api/login',{body:{username:'owner',password}});assert.equal(login.status,201);const token=login.data.token;
+ assert.equal((await call('/api/status',{token})).status,200);
+ server.store.addDevice('legacy-device','legacy',await import('../src/bridge.mjs').then(m=>m.digest('old-pairing-token')));
+ assert.equal((await call('/api/status',{token:'old-pairing-token'})).status,401);
+ const ws=new WebSocket(server.address.replace('http:','ws:')+'/events');ws.on('error',()=>{});await once(ws,'open');const messages=[];ws.on('message',b=>messages.push(JSON.parse(b)));ws.send(JSON.stringify(wsProof(key,server.address,token)));await new Promise(r=>setTimeout(r,40));assert.ok(messages.some(e=>e.type==='authenticated'));
+ await accounts.set('owner',password+'-changed');assert.equal((await call('/api/status',{token})).status,401);
+ const closed=once(ws,'close');server.bridge.event('private-after-reset',{value:'must not reach old device'});assert.equal((await closed)[0],4003);assert.equal(messages.some(e=>e.type==='private-after-reset'),false);
+ approve(server,key,accounts.current().generation);const fresh=await call('/api/login',{body:{username:'owner',password:password+'-changed'}});assert.equal(fresh.status,201);
+ await server.close();server=await startServer({port:0,dataDir,roots:[workspace],rpc:new Rpc()});assert.equal((await call('/api/status',{token:fresh.data.token})).status,200);assert.equal((await call('/api/status',{token})).status,401);
+ assert.equal((await call('/admin/account-ready')).status,403);
+});
+test('login guessing is throttled and weak setup passwords are rejected',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'codex-password-limit-')),a=new Accounts(dir);
+ await assert.rejects(()=>a.set('owner','1234567'));
+ await a.set('owner','aB123456');assert.equal((await a.verify('owner','aB123456')).username,'owner');
+ await a.set('owner',password);
+ for(let i=0;i<5;i++)await assert.rejects(()=>a.verify('owner','wrong'),e=>e.status===401);
+ await assert.rejects(()=>a.verify('owner',password),e=>e.status===429);
+ a.until=0;assert.equal((await a.verify('owner',password)).username,'owner');
+});
