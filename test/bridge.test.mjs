@@ -2,7 +2,7 @@ import {identity,headers as signedHeaders,wsProof,approve} from './identity-help
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter,once} from 'node:events';
-import {mkdtempSync,mkdirSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,rmSync,unlinkSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {after} from 'node:test';
@@ -99,6 +99,39 @@ test('uploads reject non-image signatures; workspace boundaries reject sibling d
  const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');const r=await s.request('/api/uploads',{method:'POST',raw:image,headers:{'content-type':'application/octet-stream'}});assert.equal(r.status,201);assert.equal(r.data.size,image.length);
  const outside=path.join(s.root,'workspace-other');mkdirSync(outside);assert.equal((await s.request('/api/threads',{method:'POST',body:{cwd:outside}})).status,403);
  const imageTask=await s.request('/api/threads/'+s.thread.id+'/messages',{method:'POST',body:{messageId:'image-msg-01',attachmentIds:[r.data.id]}});assert.equal(imageTask.status,202);await tick();assert.equal(s.rpc.starts[0].input[0].type,'localImage');s.rpc.finish(s.thread.id,s.rpc.starts[0].id);
+});
+
+test('historical and live images use protected upload IDs without exposing paths',async t=>{
+ const s=await setup(t),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
+ const upload=(await s.request('/api/uploads',{method:'POST',raw:png})).data;
+ const item={id:'photo-item',type:'userMessage',content:[{type:'text',text:'look at this'},{type:'localImage',path:path.join(s.service.dataDir,'uploads',upload.id)},{type:'localImage',path:path.join(s.workspace,upload.id)},{type:'image',url:'https://untrusted.example/private.png'}]};
+ const original=s.rpc.request.bind(s.rpc);s.rpc.request=async(method,p)=>method==='thread/turns/list'?{data:[{id:'old-turn',items:[item]}],nextCursor:null}:original(method,p);
+ const history=(await s.request('/api/threads/'+s.thread.id+'/history')).data;
+ const content=history.turns[0].items[0].content;
+ assert.deepEqual(content[1].image,{id:upload.id,mime:'image/png',size:png.length,available:true});
+ assert.equal(content[2].image.available,false);assert.equal(content[2].image.id,undefined);assert.equal(content[3].image.available,false);
+ assert.equal(JSON.stringify(history).includes(s.service.dataDir),false);assert.equal(JSON.stringify(history).includes('untrusted.example'),false);
+ s.rpc.emit('notification',{method:'item/completed',params:{threadId:s.thread.id,turnId:'old-turn',item}});
+ const event=s.service.store.events(0).filter(e=>e.type==='thread.event').at(-1);assert.equal(event.data.item.content[1].image.id,upload.id);
+ const route='/api/uploads/'+upload.id;
+ const response=await fetch(s.service.address+route,{headers:{authorization:'Bearer '+s.token,...signedHeaders(s.key,s.service.address,'GET',route,Buffer.alloc(0),s.token)}});
+ assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await response.arrayBuffer()),png);
+ assert.equal((await fetch(s.service.address+route)).status,401);
+ assert.equal((await fetch(s.service.address+route,{headers:{authorization:'Bearer '+s.token}})).status,403);
+});
+
+test('preview references survive restart and deleted cached images return an explicit 404',async t=>{
+ const a=await setup(t),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
+ const upload=(await a.request('/api/uploads',{method:'POST',raw:png})).data;
+ const file=path.join(a.service.dataDir,'uploads',upload.id),item={id:'historical-image',type:'userMessage',content:[{type:'localImage',path:file}]};
+ await a.service.close();const rpc=new FakeRpc(a.workspace);rpc.threads.set(a.thread.id,{id:a.thread.id,cwd:a.workspace,name:'restored'});
+ const request=rpc.request.bind(rpc);rpc.request=async(method,p)=>method==='thread/turns/list'?{data:[{id:'original-turn',items:[item]}],nextCursor:null}:request(method,p);
+ const b=await setup(t,{dir:a.root,rpc});
+ const route='/api/threads/'+a.thread.id+'/history';
+ assert.equal((await b.request(route)).data.turns[0].items[0].content[0].image.available,true);
+ unlinkSync(file);
+ const gone=(await b.request(route)).data.turns[0].items[0].content[0].image;assert.equal(gone.id,upload.id);assert.equal(gone.available,false);
+ const result=await b.request('/api/uploads/'+upload.id);assert.equal(result.status,404);assert.match(result.data.error.message,/图片已不可用/);
 });
 test('WebSocket requires authentication, replays progress after reconnect, and revoked devices lose access',async t=>{
  const s=await setup(t);const url=s.service.address.replace('http:','ws:')+'/events';

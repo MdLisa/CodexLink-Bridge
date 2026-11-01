@@ -10,7 +10,7 @@ import {RpcClient} from './rpc.mjs';
 import {DeviceSecurity} from './device-security.mjs';
 import {Accounts} from './accounts.mjs';
 import {Bridge,BridgeError,digest,jobView} from './bridge.mjs';
-export const VERSION='0.3.0';
+export const VERSION='0.3.1';
 function equal(a,b){const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y);}
 function imageMime(b){if(b.length>=24&&b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))return'image/png';if(b.length>=4&&b[0]===255&&b[1]===216&&b[2]===255)return'image/jpeg';if(b.length>=12&&b.toString('ascii',0,4)==='RIFF'&&b.toString('ascii',8,12)==='WEBP')return'image/webp';if(b.length>=10&&/^GIF8[79]a$/.test(b.toString('ascii',0,6)))return'image/gif';return null;}
 async function readBody(req,max){if(req.deviceBody){if(req.deviceBody.length>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');return req.deviceBody;}if(Number(req.headers['content-length'])>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');let size=0;const chunks=[];for await(const b of req){size+=b.length;if(size>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');chunks.push(b);}req.deviceBody=Buffer.concat(chunks);return req.deviceBody;}
@@ -93,7 +93,7 @@ export async function startServer(options={}){
           const id=randomUUID();writeFileSync(path.join(uploadDir,id),body,{flag:'wx'});const upload={id,mime,size:body.length,sha256:digest(body)};store.addUpload(upload);reply(res,201,{...upload,url:'/api/uploads/'+id});return;
         }
         if(parts[1]==='uploads'&&parts.length===3&&req.method==='GET'){
-          const upload=store.upload(parts[2]);if(!upload)throw new BridgeError(404,'UPLOAD_NOT_FOUND','图片不存在。');res.writeHead(200,{'content-type':upload.mime,'content-length':upload.size,'cache-control':'no-store','x-content-type-options':'nosniff'});const stream=createReadStream(path.join(uploadDir,upload.id));stream.on('error',()=>res.destroy());stream.pipe(res);return;
+          const image=bridge.imageFile(parts[2]);if(!image)throw new BridgeError(404,'UPLOAD_NOT_FOUND','图片已不可用，电脑上的原图可能已删除。');const {upload,file}=image;res.writeHead(200,{'content-type':upload.mime,'content-length':upload.size,'cache-control':'no-store','x-content-type-options':'nosniff'});const stream=createReadStream(file);stream.on('error',()=>res.destroy());stream.pipe(res);return;
         }
         throw new BridgeError(404,'NOT_FOUND','接口不存在。');
       }catch(e){if(!res.headersSent)reply(res,e.status||500,{error:{code:e.code||'INTERNAL_ERROR',message:e.status||e.rpcCode?e.message:'后台处理失败，请在电脑上检查服务状态。'}});else res.destroy();options.onError?.(e);}

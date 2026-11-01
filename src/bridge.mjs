@@ -9,10 +9,10 @@ const DISABLED_PLUGINS=['unified-computer-use@openai-bundled','computer-use@open
 const INSTRUCTIONS='本会话通过用户自己的手机连接本机 Codex。桌面自动点击、键盘输入和电脑操作插件暂不可用，不使用 computer-use、cua_repl 或 @oai/sky。优先使用文件、终端和普通工具；若任务必须依赖桌面自动操作，清楚说明该功能暂未接入。';
 const terminal=new Set(['completed','failed','interrupted','cancelled','needsReview']);
 export function jobView(j){if(!j)return null;return{id:j.id,threadId:j.thread_id,messageId:j.message_id,state:j.state,turnId:j.turn_id,error:j.error,createdAt:j.created_at,updatedAt:j.updated_at};}
-export function itemView(i){
+export function itemView(i,imageView=()=>({available:false})){
   if(!i)return null;
   if(i.type==='agentMessage')return{type:i.type,id:i.id,text:i.text,phase:i.phase};
-  if(i.type==='userMessage')return{type:i.type,id:i.id,content:(i.content||[]).map(c=>c.type==='text'?{type:'text',text:c.text}:{type:c.type,attachment:true})};
+  if(i.type==='userMessage')return{type:i.type,id:i.id,content:(i.content||[]).map(c=>c.type==='text'?{type:'text',text:c.text}:{type:c.type,attachment:true,image:imageView(c)})};
   if(i.type==='commandExecution')return{type:i.type,id:i.id,command:i.command,cwd:i.cwd,status:i.status,aggregatedOutput:i.aggregatedOutput,exitCode:i.exitCode,durationMs:i.durationMs};
   if(i.type==='fileChange')return{type:i.type,id:i.id,status:i.status,changes:i.changes};
   if(i.type==='mcpToolCall')return{type:i.type,id:i.id,server:i.server,tool:i.tool,status:i.status,result:i.result,error:i.error};
@@ -25,6 +25,24 @@ export class Bridge extends EventEmitter {
     rpc.on('notification',m=>this.notification(m));rpc.on('request',m=>this.serverRequest(m));rpc.on('disconnected',()=>this.disconnected());
   }
   event(type,data){const e=this.store.event(type,data);this.emit('event',e);return e;}
+  imageFile(id){
+    if(typeof id!=='string'||! /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id))return null;
+    const upload=this.store.upload(id);if(!upload||!['image/png','image/jpeg','image/webp','image/gif'].includes(upload.mime))return null;
+    try{
+      const file=realpathSync(path.join(this.uploadDir,id)),root=realpathSync(this.uploadDir),stat=statSync(file);
+      if(path.dirname(file)!==root||!stat.isFile()||stat.size!==upload.size||stat.size>10*1024*1024)return null;
+      return{file,upload};
+    }catch{return null;}
+  }
+  imageView(content){
+    if(content.type!=='localImage'||typeof content.path!=='string')return{available:false};
+    const id=path.basename(content.path).toLowerCase();
+    const normal=p=>process.platform==='win32'?path.resolve(p).toLowerCase():path.resolve(p);
+    if(normal(content.path)!==normal(path.join(this.uploadDir,id)))return{available:false};
+    const upload=this.store.upload(id);if(!upload)return{available:false};
+    return{id:upload.id,mime:upload.mime,size:upload.size,available:Boolean(this.imageFile(upload.id))};
+  }
+  viewItem(item){return itemView(item,c=>this.imageView(c));}
   async start(){await this.rpc.start();this.online=true;this.store.recover();for(const j of this.store.queued())this.pump(j.thread_id);}
   allowed(cwd){try{const p=realpathSync(cwd);return this.roots.some(root=>{const rel=path.relative(root,p);return rel===''||(!rel.startsWith('..'+path.sep)&&rel!=='..'&&!path.isAbsolute(rel));});}catch{return false;}}
   workspace(cwd){const p=cwd||this.roots[0];if(!existsSync(p)||!statSync(p).isDirectory()||!this.allowed(p))throw new BridgeError(403,'WORKSPACE_DENIED','这个目录不在电脑端允许的项目范围内。');return realpathSync(p);}
@@ -32,7 +50,7 @@ export class Bridge extends EventEmitter {
     if(!this.allowed(r.thread.cwd))throw new BridgeError(403,'WORKSPACE_DENIED','这个聊天不在允许的项目范围内。');this.metadata.set(id,r.thread);return r.thread;}
   threadView(t){return{id:t.id,name:t.name||t.preview?.slice(0,60)||'未命名聊天',cwd:t.cwd,createdAt:t.createdAt,updatedAt:t.updatedAt,control:this.loaded.has(t.id)?'bridge':'readOnly',bridgeJob:this.active.get(t.id)?jobView(this.store.job(this.active.get(t.id))):null};}
   async list(cursor){const r=await this.rpc.request('thread/list',{limit:50,cursor:cursor||null,sortKey:'updated_at',sortDirection:'desc',archived:false});return{threads:(r.data||[]).filter(t=>this.allowed(t.cwd)).map(t=>this.threadView(t)),nextCursor:r.nextCursor||null};}
-  async history(id,{cursor,limit=20}={}){await this.info(id);const r=await this.rpc.request('thread/turns/list',{threadId:id,limit:Math.min(50,Math.max(1,limit)),sortDirection:'desc',itemsView:'full',cursor:cursor||null});return{turns:(r.data||[]).map(t=>({id:t.id,storedStatus:t.status,items:(t.items||[]).map(itemView).filter(Boolean)})),nextCursor:r.nextCursor||null,liveStateFromHistory:false};}
+  async history(id,{cursor,limit=20}={}){await this.info(id);const r=await this.rpc.request('thread/turns/list',{threadId:id,limit:Math.min(50,Math.max(1,limit)),sortDirection:'desc',itemsView:'full',cursor:cursor||null});return{turns:(r.data||[]).map(t=>({id:t.id,storedStatus:t.status,items:(t.items||[]).map(i=>this.viewItem(i)).filter(Boolean)})),nextCursor:r.nextCursor||null,liveStateFromHistory:false};}
   available(){if(this.handoff||this.closing||!this.online)throw new BridgeError(503,'BRIDGE_BUSY','后台正在交接或断开，请稍后刷新重试。');}
   async create({cwd,name}={}){this.available();this.creating++;try{const dir=this.workspace(cwd);const r=await this.rpc.request('thread/start',{cwd:dir,sandbox:'workspace-write',approvalPolicy:this.approvalPolicy,approvalsReviewer:'user',developerInstructions:INSTRUCTIONS});const id=r.thread.id;this.store.ownThread(id);this.loaded.add(id);this.metadata.set(id,{...r.thread,cwd:r.thread.cwd||dir});if(name)await this.rpc.request('thread/name/set',{threadId:id,name:name.slice(0,100)});return this.threadView({...r.thread,cwd:dir,name:name||r.thread.name});}finally{this.creating--;}}
   async acquire(id){this.available();if(this.loaded.has(id))return;await this.info(id);this.available();if(this.loading.has(id))return this.loading.get(id);
@@ -72,7 +90,7 @@ export class Bridge extends EventEmitter {
     let data;
     if(m.method==='item/agentMessage/delta')data={threadId:id,turnId:p.turnId,itemId:p.itemId,delta:p.delta};
     else if(m.method==='item/commandExecution/outputDelta')data={threadId:id,turnId:p.turnId,itemId:p.itemId,delta:p.delta};
-    else if(['item/started','item/completed'].includes(m.method)){const item=itemView(p.item);if(item)data={threadId:id,turnId:p.turnId,item};}
+    else if(['item/started','item/completed'].includes(m.method)){const item=this.viewItem(p.item);if(item)data={threadId:id,turnId:p.turnId,item};}
     else if(m.method==='turn/completed')data={threadId:id,turn:p.turn};
     else if(m.method==='error')data={threadId:id,error:p.error};
     if(data)this.event('thread.event',{method:m.method,...data});

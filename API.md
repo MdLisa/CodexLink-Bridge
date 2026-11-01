@@ -91,3 +91,7 @@ request.id 是桥接生成的随机编号，不暴露底层请求 ID。显示请
 `THREAD_BUSY` 时保持原聊天和未成功发送内容，提示用户释放桌面占用后重试；不要新建副本。`TASK_PENDING` 的交回请求需要所有手机任务结束或停止。`TASK_STARTING` 停止请求需要稍后再试。
 
 安全边界：不提供任意原始 RPC、任意上传路径、远程修改代理和远程停止服务。`/admin/stop` 是本机管理程序专用，手机凭据无权使用。
+
+## Image references (0.3.1)
+
+Historical and live user-message image parts include `image: {id, mime, size, available}` for existing bridge uploads. Local file paths and remote image URLs are not returned. Unknown/unmapped images use `{available:false}`. Read image bytes with the existing device-authenticated and signed `GET /api/uploads/{id}` endpoint; missing or invalid cached images return JSON HTTP 404. Arbitrary filesystem paths are not accepted.
