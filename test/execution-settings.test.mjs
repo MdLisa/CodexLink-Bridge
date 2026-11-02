@@ -49,7 +49,7 @@ test('automatic review applies to new, resumed and already-loaded chats without 
   assert.equal(rpc.responses.length,0);assert.equal(b.requests.size,2);
   rpc.emit('notification',{method:'turn/completed',params:{threadId:thread.id,turn:{id:turnId,status:'completed'}}});
   setExecutionSettings(dataDir,'user');await b.enqueue(thread.id,{messageId:'review-test-002',text:'next'});await new Promise(r=>setImmediate(r));
-  p=rpc.calls.filter(c=>c.method==='turn/start').at(-1).params;assert.equal(p.approvalsReviewer,'user');assert.equal('approvalPolicy' in p,false);
+  p=rpc.calls.filter(c=>c.method==='turn/start').at(-1).params;assert.equal(p.approvalsReviewer,'user');assert.equal(p.approvalPolicy,'on-request');
   setExecutionSettings(dataDir,'auto_review');assert.equal(b.reviewSettings().approvalsReviewer,'auto_review');
   assert.equal((await fetch(service.address+'/api/status')).status,401);
 });

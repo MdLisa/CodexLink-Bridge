@@ -16,14 +16,14 @@ export function findCodex(){
   throw new Error('找不到 Codex。请安装并登录 Codex，或在电脑上配置 CODEX_EXE。');
 }
 export class RpcClient extends EventEmitter {
-  constructor({exe=findCodex(),timeout=30000}={}){super();this.exe=exe;this.timeout=timeout;this.nextId=0;this.pending=new Map();this.closed=false;this.ready=null;this.stderr='';}
+  constructor({exe=findCodex(),timeout=30000,environment,cwd}={}){super();this.exe=exe;this.timeout=timeout;this.environment=environment;this.cwd=cwd;this.nextId=0;this.pending=new Map();this.closed=false;this.ready=null;this.stderr='';}
   async start(){
     if(this.ready)return this.ready;
     this.ready=this.initialize();return this.ready;
   }
   async initialize(){
-    const env=codexEnvironment();
-    this.proc=spawn(this.exe,['app-server','--listen','stdio://'],{windowsHide:true,stdio:['pipe','pipe','pipe'],env});
+    const env=this.environment||codexEnvironment();
+    this.proc=spawn(this.exe,['app-server','--listen','stdio://'],{windowsHide:true,stdio:['pipe','pipe','pipe'],env,...(this.cwd?{cwd:this.cwd}:{})});
     this.proc.stdin.on('error',()=>{});
     this.proc.stderr.on('data',b=>{this.stderr=(this.stderr+b.toString()).slice(-4000);});
     this.proc.on('error',e=>this.fail(e));

@@ -39,7 +39,7 @@ async function display(checkPublic=false){
  console.log('手机地址：'+(s.address||'尚未配置'));
  console.log('项目目录：'+selected.workspace);
  console.log('附件目录：'+configuredFileRoot(dir));
- console.log('操作审批：'+reviewerLabel(executionSettings(dir).approvalsReviewer));
+ console.log('新手机默认审批：'+reviewerLabel(executionSettings(dir).approvalsReviewer)+'（已配置手机按各自设置）');
  if(s.backend&&s.runtime.roots?.[0]!==selected.workspace)console.log('当前运行目录：'+s.runtime.roots?.[0]+'（新目录将在下次停止并启动后生效）');
  if(checkPublic&&s.backend&&s.tunnel&&s.address){
   console.log('正在检查固定入口是否可达……');
@@ -98,7 +98,7 @@ async function settings(){
  while(true){
   let startup;try{startup=startupSetting();}catch{}
   console.log('\n设置与手机审批');
-  console.log('1. 审批 / 撤销手机 / 设置手机项目范围');console.log('2. 设置账号密码');console.log('3. 设置固定外网');console.log('4. 修改默认项目目录（已配置手机范围保持不变）');console.log('5. '+(startup?.enabled?'关闭':'开启')+'开机自动启动'+(startup?'':'（状态读取失败）'));console.log('6. 修改电脑附件目录');console.log('7. 设置操作审批（手动 / 帮我批准）');console.log('0. 返回主菜单');
+  console.log('1. 审批 / 撤销手机 / 设置手机项目范围');console.log('2. 设置账号密码');console.log('3. 设置固定外网');console.log('4. 修改默认项目目录（已配置手机范围保持不变）');console.log('5. '+(startup?.enabled?'关闭':'开启')+'开机自动启动'+(startup?'':'（状态读取失败）'));console.log('6. 修改电脑附件目录');console.log('7. 设置手机操作审批（手动 / 帮我批准）');console.log('8. 设置新手机默认审批');console.log('0. 返回主菜单');
   const choice=await ask('请选择：');if(choice==='0'||choice==='')return;
   try{
    if(choice==='1')await run('devices.mjs',[],true);
@@ -109,7 +109,8 @@ async function settings(){
    }
    else if(choice==='4')await changeWorkspace();
    else if(choice==='6')await run('attachment-settings.mjs',[],true);
-   else if(choice==='7')await run('execution-settings.mjs',[],true);
+   else if(choice==='7')await run('devices.mjs',['--approvals'],true);
+   else if(choice==='8')await run('execution-settings.mjs',[],true);
    else if(choice==='5'){
     const current=startupSetting();const result=startupSetting(current.enabled?'disable':'enable');
     console.log(result.enabled?'已开启：登录 Windows 后，后台和外网将在隐藏窗口中自动启动。':'已关闭开机自动启动；当前已运行的连接继续运行。');

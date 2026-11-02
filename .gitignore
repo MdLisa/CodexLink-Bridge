@@ -6,6 +6,7 @@ node_modules/
 CodexPhoneBridge/
 /data/
 uploads/
+chat-only/
 account.json
 account.json.*.tmp
 runtime.json
