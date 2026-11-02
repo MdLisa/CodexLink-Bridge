@@ -137,8 +137,8 @@ test('WebSocket requires authentication, replays progress after reconnect, and r
  const s=await setup(t);const url=s.service.address.replace('http:','ws:')+'/events';
  const noAuth=new WebSocket(url);noAuth.on('error',()=>{});await once(noAuth,'open');noAuth.send(JSON.stringify({type:'ping'}));const [code]=await once(noAuth,'close');assert.equal(code,4001);
  const socket=new WebSocket(url);socket.on('error',()=>{});const messages=[];socket.on('message',b=>messages.push(JSON.parse(b)));await once(socket,'open');socket.send(JSON.stringify(wsProof(s.key,s.service.address,s.token,0)));await tick();assert.ok(messages.some(m=>m.type==='authenticated'));
- const e=s.service.bridge.event('test.progress',{value:1});await tick();assert.ok(messages.some(m=>m.seq===e.seq));socket.close();await once(socket,'close');
- const missed=s.service.bridge.event('test.progress',{value:2});const reconnected=new WebSocket(url);reconnected.on('error',()=>{});const replay=[];reconnected.on('message',b=>replay.push(JSON.parse(b)));await once(reconnected,'open');reconnected.send(JSON.stringify(wsProof(s.key,s.service.address,s.token,e.seq)));await tick();assert.ok(replay.some(m=>m.seq===missed.seq));
+ const e=s.service.bridge.event('test.progress',{threadId:s.thread.id,value:1});await tick();assert.ok(messages.some(m=>m.seq===e.seq));socket.close();await once(socket,'close');
+ const missed=s.service.bridge.event('test.progress',{threadId:s.thread.id,value:2});const reconnected=new WebSocket(url);reconnected.on('error',()=>{});const replay=[];reconnected.on('message',b=>replay.push(JSON.parse(b)));await once(reconnected,'open');reconnected.send(JSON.stringify(wsProof(s.key,s.service.address,s.token,e.seq)));await tick();assert.ok(replay.some(m=>m.seq===missed.seq));
  const closed=once(reconnected,'close');assert.equal((await s.request('/api/devices/'+s.deviceId,{method:'DELETE'})).status,200);assert.equal((await closed)[0],4003);assert.equal((await s.request('/api/status')).status,401);
 });
 test('uncertain work is not automatically repeated after a restart, and duplicate IDs keep their original task',async t=>{

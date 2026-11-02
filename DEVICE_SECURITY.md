@@ -20,3 +20,11 @@ Body bytes are exactly the transmitted payload, empty for GET. All signatures us
 WebSocket /events uses first-frame auth with token, after, deviceTime, deviceNonce, deviceSignature. Method is WS and signed body is the UTF-8 decimal after value. Plain bearer-only WebSocket auth is removed. Existing legacy bearer tokens lacking a device binding are rejected.
 
 There is no public approval endpoint. Approval and revocation are performed by scripts/devices.mjs on the computer with the local Windows user's permissions. Registry entries and login tokens are bound to the account generation; password reset invalidates both.
+
+## Project access (0.5.0)
+
+Local device management also configures a persistent project policy per fingerprint and account generation. A new login token never broadens that policy. Explicit directory policies include descendants after canonical path checks; sibling prefixes, traversal and junction escapes do not match. Unlimited mode must be explicitly selected at the computer.
+
+HTTP authorization and event filtering use the phone's current policy; cached/loaded Codex threads do not bypass it. Persisted event workspace attribution supports scoped replay after restart. Attachments are bound to their uploading device before submission and to chat projects afterward. Phones cannot list or revoke another phone's login sessions. Corrupt policies deny access.
+
+Project visibility is distinct from Codex's filesystem sandbox and approval settings. This release retains the global reviewer. It does not implement chat-only isolation or erase information a device previously received. Reviewers and pure-chat execution isolation are later stages.

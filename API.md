@@ -17,8 +17,8 @@
 | GET `/health` | 无需登录；`ready` 是后台是否连上 Codex，不代表模型网络已验证 |
 | POST `/api/login` | JSON `{username,password,deviceName}`；201 返回 `{device:{id,name},token}`，手机安全保存 token |
 | GET `/api/status` | online、允许目录、能力、当前设备和待处理授权/提问列表 |
-| GET `/api/devices` | 已登录设备列表 |
-| DELETE `/api/devices/:id` | 撤销设备，立即关闭该设备实时连接 |
+| GET `/api/devices` | 本机设备身份的已登录连接列表 |
+| DELETE `/api/devices/:id` | 撤销本机设备身份的连接，禁止管理其他手机 |
 | GET `/api/threads?cursor=…` | 最近聊天列表，仅返回允许目录内的聊天，附 nextCursor |
 | POST `/api/threads` | JSON `{cwd?,name?}`；201 返回聊天，cwd 默认首个允许目录 |
 | GET `/api/threads/:id` | 聊天元数据；control 为 bridge 或 readOnly |
@@ -99,3 +99,15 @@ Historical and live user-message image parts include `image: {id, mime, size, av
 ## Generic files (0.4.0)
 
 Device-signed POST /api/files?id=<UUID>&name=<filename>&mime=<MIME> accepts up to 10 MiB of raw bytes. The signed query binds metadata to the body. An identical retry returns the existing ID; conflicting content is rejected. Files are stored beneath the configured directory in separate UUID folders. POST /api/threads/{id}/messages accepts optional fileIds alongside attachmentIds (maximum 8 combined). Saved local paths are included in the Codex input; authenticated history and live user-message views expose safe files metadata cards instead of the generated path manifest. No generic arbitrary-path download API is added.
+
+## Per-device project access (0.5.0)
+
+`GET /api/status` adds `capabilities.perDeviceProjects: true` and `projectAccess: {mode: "directories" | "all", roots: string[], revision: string}`. `workspaces` contains that device's configured roots, or the server's default workspace suggestions in `all` mode. A changed revision invalidates client catalog, selected-thread and image caches. Existing clients retain server-side enforcement.
+
+The policy is stored by approved public-key fingerprint and account generation, independent of login token/session IDs. Existing devices snapshot the previous global roots. New devices default to those roots; unlimited access requires explicit local configuration. All chat operations, task lookup/cancellation and approval responses check the requesting phone's current policy, including already-loaded threads. Policies control chat project directories; they do not replace the Codex execution sandbox or global approval reviewer.
+
+Live and replayed events are filtered using a persisted workspace attribution; unattributed legacy chat events are omitted and clients refresh canonical history. Policy updates send a neutral `access.changed` event and close affected sockets with code `4009`; clients reconnect without discarding credentials. Status exposes only approval requests in permitted projects. Devices API lists and revokes only sessions sharing the caller's device identity.
+
+Attachment uploads record their device identity. Before submission, only that device can use them. Once linked to chats, access follows permitted chat directories, including when an attachment ID is known. Legacy images acquire chat attribution when their authenticated history is read; unattached legacy images are denied. No arbitrary-file download endpoint is introduced.
+
+Local management only: `POST /admin/project-access`, loopback source plus `x-bridge-admin`, JSON `{fingerprint,generation,mode,roots}`. Paths must be existing absolute directories and are canonicalized; up to 32 directories, no empty restricted scope. `all` requires an empty roots array. Out-of-scope running tasks return `409 TASK_PENDING` without saving. Out-of-scope queued jobs are failed, and queued jobs recheck current policy before execution. Legacy queued jobs without device attribution become `needsReview` after migration. The phone has no policy-write API.

@@ -98,7 +98,7 @@ async function settings(){
  while(true){
   let startup;try{startup=startupSetting();}catch{}
   console.log('\n设置与手机审批');
-  console.log('1. 审批 / 撤销手机');console.log('2. 设置账号密码');console.log('3. 设置固定外网');console.log('4. 修改项目目录');console.log('5. '+(startup?.enabled?'关闭':'开启')+'开机自动启动'+(startup?'':'（状态读取失败）'));console.log('6. 修改电脑附件目录');console.log('7. 设置操作审批（手动 / 帮我批准）');console.log('0. 返回主菜单');
+  console.log('1. 审批 / 撤销手机 / 设置手机项目范围');console.log('2. 设置账号密码');console.log('3. 设置固定外网');console.log('4. 修改默认项目目录（已配置手机范围保持不变）');console.log('5. '+(startup?.enabled?'关闭':'开启')+'开机自动启动'+(startup?'':'（状态读取失败）'));console.log('6. 修改电脑附件目录');console.log('7. 设置操作审批（手动 / 帮我批准）');console.log('0. 返回主菜单');
   const choice=await ask('请选择：');if(choice==='0'||choice==='')return;
   try{
    if(choice==='1')await run('devices.mjs',[],true);
