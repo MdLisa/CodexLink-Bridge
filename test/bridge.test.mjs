@@ -2,7 +2,7 @@ import {identity,headers as signedHeaders,wsProof,approve} from './identity-help
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter,once} from 'node:events';
-import {mkdtempSync,mkdirSync,readFileSync,rmSync,unlinkSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,rmSync,unlinkSync,readdirSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {after} from 'node:test';
@@ -147,4 +147,38 @@ test('uncertain work is not automatically repeated after a restart, and duplicat
  const rpc=new FakeRpc(a.workspace);rpc.threads.set(a.thread.id,{id:a.thread.id,cwd:a.workspace,name:'restored'});const b=await setup(t,{dir:a.root,rpc});
  const recovered=(await b.request('/api/jobs/'+j.id)).data;assert.equal(recovered.state,'needsReview');assert.equal(rpc.starts.length,0);
  const duplicate=await b.request('/api/threads/'+a.thread.id+'/messages',{method:'POST',body:p});assert.equal(duplicate.data.duplicate,true);assert.equal(duplicate.data.job.id,j.id);assert.equal(rpc.starts.length,0);
+});
+
+test('signed generic file upload preserves bytes, keeps names safe, and retries without duplicates',async t=>{
+ const s=await setup(t),id='12345678-1234-1234-1234-123456789abc',body=Buffer.from('hello from a document');
+ const route='/api/files?id='+id+'&name='+encodeURIComponent('../任务书?.txt')+'&mime=text%2Fplain';
+ const uploaded=await s.request(route,{method:'POST',raw:body});assert.equal(uploaded.status,201);assert.equal(uploaded.data.id,id);assert.equal(uploaded.data.name,'.._任务书_.txt');
+ const stored=s.service.store.fileUpload(id);const file=s.service.bridge.files.location(stored);assert.equal(path.dirname(path.dirname(file)),s.service.bridge.files.root);assert.deepEqual(readFileSync(file),body);assert.equal(s.rpc.starts.length,0);
+ const retried=await s.request(route,{method:'POST',raw:body});assert.equal(retried.data.id,id);assert.equal(readdirSync(s.service.bridge.files.root).length,1);
+ assert.equal((await s.request(route,{method:'POST',raw:Buffer.from('different')})).status,400);
+ assert.equal((await fetch(s.service.address+route,{method:'POST',body})).status,401);
+ assert.equal((await fetch(s.service.address+route,{method:'POST',body,headers:{authorization:'Bearer '+s.token}})).status,403);
+ assert.equal((await s.request('/api/files?id=not-an-id&name=file.txt',{method:'POST',raw:body})).status,400);
+});
+
+test('file paths are passed to Codex while history retains safe cards after restart or cache deletion',async t=>{
+ const a=await setup(t),id='22345678-1234-1234-1234-123456789abc',pdf=Buffer.from('%PDF-1.4 test document');
+ await a.request('/api/files?id='+id+'&name=report.pdf&mime=application%2Fpdf',{method:'POST',raw:pdf});
+ const message={messageId:'file-message-0001',text:'summarize this file',attachmentIds:[],fileIds:[id]};
+ await a.request('/api/threads/'+a.thread.id+'/messages',{method:'POST',body:message});await tick();
+ const input=a.rpc.starts[0].input[0].text,record=a.service.store.fileUpload(id),file=a.service.bridge.files.location(record);
+ assert.ok(input.includes(JSON.stringify(file)));assert.ok(input.includes('summarize this file'));assert.deepEqual(readFileSync(file),pdf);
+ const item={id:'file-user-item',clientId:message.messageId,type:'userMessage',content:[{type:'text',text:input}]};
+ a.rpc.finish(a.thread.id,a.rpc.starts[0].id);await a.service.close();
+ const rpc=new FakeRpc(a.workspace);rpc.threads.set(a.thread.id,{id:a.thread.id,cwd:a.workspace,name:'file chat'});const original=rpc.request.bind(rpc);rpc.request=async(method,p)=>method==='thread/turns/list'?{data:[{id:'turn-1',items:[item]}],nextCursor:null}:original(method,p);
+ const b=await setup(t,{dir:a.root,rpc});let history=(await b.request('/api/threads/'+a.thread.id+'/history')).data;let view=history.turns[0].items[0];
+ assert.equal(view.content[0].text,message.text);assert.equal(view.files[0].name,'report.pdf');assert.equal(view.files[0].available,true);assert.equal(JSON.stringify(history).includes(file),false);
+ const duplicate=await b.request('/api/threads/'+a.thread.id+'/messages',{method:'POST',body:message});assert.equal(duplicate.data.duplicate,true);assert.equal(rpc.starts.length,0);
+ unlinkSync(file);history=(await b.request('/api/threads/'+a.thread.id+'/history')).data;assert.equal(history.turns[0].items[0].files[0].available,false);
+});
+
+test('generic files respect the existing ten-megabyte limit',async t=>{
+ const s=await setup(t);const route='/api/files?id=32345678-1234-1234-1234-123456789abc&name=big.bin';
+ assert.equal((await s.request(route,{method:'POST',raw:Buffer.alloc(10*1024*1024+1)})).status,413);
+ assert.equal(s.service.store.fileUpload('32345678-1234-1234-1234-123456789abc'),undefined);
 });

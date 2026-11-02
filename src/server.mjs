@@ -5,12 +5,14 @@ import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {WebSocketServer,WebSocket} from 'ws';
+import {FileUploads} from './files.mjs';
+import {executionSettings,reviewerValue} from './execution-settings.mjs';
 import {Store,now} from './store.mjs';
 import {RpcClient} from './rpc.mjs';
 import {DeviceSecurity} from './device-security.mjs';
 import {Accounts} from './accounts.mjs';
 import {Bridge,BridgeError,digest,jobView} from './bridge.mjs';
-export const VERSION='0.3.1';
+export const VERSION='0.4.0';
 function equal(a,b){const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y);}
 function imageMime(b){if(b.length>=24&&b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))return'image/png';if(b.length>=4&&b[0]===255&&b[1]===216&&b[2]===255)return'image/jpeg';if(b.length>=12&&b.toString('ascii',0,4)==='RIFF'&&b.toString('ascii',8,12)==='WEBP')return'image/webp';if(b.length>=10&&/^GIF8[79]a$/.test(b.toString('ascii',0,6)))return'image/gif';return null;}
 async function readBody(req,max){if(req.deviceBody){if(req.deviceBody.length>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');return req.deviceBody;}if(Number(req.headers['content-length'])>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');let size=0;const chunks=[];for await(const b of req){size+=b.length;if(size>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');chunks.push(b);}req.deviceBody=Buffer.concat(chunks);return req.deviceBody;}
@@ -29,7 +31,8 @@ export async function startServer(options={}){
   const instanceId=randomUUID(),adminToken=randomBytes(32).toString('base64url'),runtimeFile=path.join(dataDir,'runtime.json');
   try{
     store=new Store(dataDir);const uploadDir=path.join(dataDir,'uploads');mkdirSync(uploadDir,{recursive:true});
-    const rpc=options.rpc||new RpcClient({exe:options.codexExe});bridge=new Bridge({rpc,store,roots,uploadDir,approvalPolicy:options.approvalPolicy||'on-request'});
+    const reviewer=options.approvalsReviewer===undefined?()=>executionSettings(dataDir).approvalsReviewer:()=>reviewerValue(options.approvalsReviewer);reviewer();
+    const rpc=options.rpc||new RpcClient({exe:options.codexExe});bridge=new Bridge({rpc,store,roots,uploadDir,files:new FileUploads(store,dataDir),approvalPolicy:options.approvalPolicy||'on-request',approvalsReviewer:reviewer});
     const allowedOrigins=new Set(options.allowedOrigins||[]);let address;
     const accounts=new Accounts(dataDir),security=new DeviceSecurity(store);
     function validDevice(d){return Boolean(d&&accounts.current()?.generation===d.auth_generation&&store.activeDevice(d.id)&&security.approved(d.device_key,d.auth_generation));}
@@ -68,7 +71,7 @@ export async function startServer(options={}){
         const requestBody=await readBody(req,req.method==='GET'?0:10*1024*1024);
         security.proof(security.lookup(device.device_key).public_key,{token:req.headers.authorization.slice(7),method:req.method,host:req.headers.host,path:req.url,time:req.headers['x-device-time'],nonce:req.headers['x-device-nonce'],signature:req.headers['x-device-signature'],body:requestBody});
         if(parts[0]!=='api')throw new BridgeError(404,'NOT_FOUND','接口不存在。');
-        if(req.method==='GET'&&u.pathname==='/api/status'){reply(res,200,{version:VERSION,online:bridge.online,workspaces:bridge.roots,deviceId:device.id,capabilities:{text:true,images:true,historyRefresh:true,queue:true,approvals:true,computerUse:false,liveDesktopTakeover:false},requests:[...bridge.requests.values()].map(r=>bridge.requestView(r))});return;}
+        if(req.method==='GET'&&u.pathname==='/api/status'){reply(res,200,{version:VERSION,online:bridge.online,workspaces:bridge.roots,deviceId:device.id,approvalsReviewer:reviewer(),capabilities:{text:true,images:true,files:true,fileLimitBytes:10*1024*1024,historyRefresh:true,queue:true,approvals:true,computerUse:false,liveDesktopTakeover:false},requests:[...bridge.requests.values()].map(r=>bridge.requestView(r))});return;}
         if(req.method==='GET'&&u.pathname==='/api/devices'){reply(res,200,{devices:store.devices().filter(d=>validDevice(store.activeDevice(d.id)))});return;}
         if(req.method==='DELETE'&&parts.length===3&&parts[1]==='devices'){
           if(!store.revoke(parts[2]))throw new BridgeError(404,'DEVICE_NOT_FOUND','设备不存在或已撤销。');for(const ws of wss.clients)if(ws.device?.id===parts[2])ws.close(4003,'Device revoked');reply(res,200,{revoked:true});return;
@@ -88,6 +91,9 @@ export async function startServer(options={}){
         if(parts[1]==='jobs'&&parts.length===3&&req.method==='GET'){const j=store.job(parts[2]);if(!j)throw new BridgeError(404,'JOB_NOT_FOUND','任务不存在。');await bridge.info(j.thread_id);reply(res,200,jobView(j));return;}
         if(parts[1]==='jobs'&&parts.length===4&&parts[3]==='cancel'&&req.method==='POST'){reply(res,200,await bridge.cancel(parts[2]));return;}
         if(parts[1]==='requests'&&parts.length===4&&parts[3]==='respond'&&req.method==='POST'){reply(res,200,bridge.respond(parts[2],await jsonBody(req)));return;}
+        if(parts[1]==='files'&&parts.length===2&&req.method==='POST'){
+          let file;try{file=bridge.files.save({id:u.searchParams.get('id'),name:u.searchParams.get('name'),mime:u.searchParams.get('mime'),body:requestBody});}catch(e){throw new BridgeError(400,'INVALID_FILE',e.message);}reply(res,201,file);return;
+        }
         if(parts[1]==='uploads'&&parts.length===2&&req.method==='POST'){
           const body=await readBody(req,10*1024*1024);const mime=imageMime(body);if(!mime)throw new BridgeError(415,'IMAGE_REQUIRED','仅支持 PNG、JPEG、WebP 和 GIF 图片。');
           const id=randomUUID();writeFileSync(path.join(uploadDir,id),body,{flag:'wx'});const upload={id,mime,size:body.length,sha256:digest(body)};store.addUpload(upload);reply(res,201,{...upload,url:'/api/uploads/'+id});return;

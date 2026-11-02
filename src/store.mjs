@@ -11,6 +11,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS bridge_threads(id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,thread_id TEXT,message_id TEXT,payload_hash TEXT,payload TEXT,state TEXT,turn_id TEXT,error TEXT,created_at TEXT,updated_at TEXT,UNIQUE(thread_id,message_id));
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,data TEXT,created_at TEXT);`);
+    this.db.exec('CREATE TABLE IF NOT EXISTS file_uploads(id TEXT PRIMARY KEY,name TEXT,mime TEXT,size INTEGER,sha256 TEXT,root TEXT,created_at TEXT)');
     if(!this.db.prepare('PRAGMA table_info(devices)').all().some(c=>c.name==='auth_generation'))this.db.exec('ALTER TABLE devices ADD COLUMN auth_generation TEXT');
     if(!this.db.prepare('PRAGMA table_info(devices)').all().some(c=>c.name==='device_key'))this.db.exec('ALTER TABLE devices ADD COLUMN device_key TEXT');
   }
@@ -22,6 +23,9 @@ export class Store {
   revoke(id){return this.db.prepare('UPDATE devices SET revoked_at=? WHERE id=? AND revoked_at IS NULL').run(now(),id).changes;}
   addUpload(u){this.db.prepare('INSERT INTO uploads VALUES(?,?,?,?,?)').run(u.id,u.mime,u.size,u.sha256,now());}
   upload(id){return this.db.prepare('SELECT * FROM uploads WHERE id=?').get(id);}
+  fileUpload(id){return this.db.prepare('SELECT * FROM file_uploads WHERE id=?').get(id);}
+  addFileUpload(r){this.db.prepare('INSERT INTO file_uploads VALUES(?,?,?,?,?,?,?)').run(r.id,r.name,r.mime,r.size,r.sha256,r.root,now());}
+  jobForTurn(thread,turn){return this.db.prepare('SELECT * FROM jobs WHERE thread_id=? AND turn_id=? ORDER BY rowid LIMIT 1').get(thread,turn);}
   ownThread(id){this.db.prepare('INSERT OR IGNORE INTO bridge_threads VALUES(?)').run(id);}
   isOwnThread(id){return Boolean(this.db.prepare('SELECT 1 FROM bridge_threads WHERE id=?').get(id));}
   existing(thread,id){return this.db.prepare('SELECT * FROM jobs WHERE thread_id=? AND message_id=?').get(thread,id);}

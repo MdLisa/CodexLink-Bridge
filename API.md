@@ -95,3 +95,7 @@ request.id 是桥接生成的随机编号，不暴露底层请求 ID。显示请
 ## Image references (0.3.1)
 
 Historical and live user-message image parts include `image: {id, mime, size, available}` for existing bridge uploads. Local file paths and remote image URLs are not returned. Unknown/unmapped images use `{available:false}`. Read image bytes with the existing device-authenticated and signed `GET /api/uploads/{id}` endpoint; missing or invalid cached images return JSON HTTP 404. Arbitrary filesystem paths are not accepted.
+
+## Generic files (0.4.0)
+
+Device-signed POST /api/files?id=<UUID>&name=<filename>&mime=<MIME> accepts up to 10 MiB of raw bytes. The signed query binds metadata to the body. An identical retry returns the existing ID; conflicting content is rejected. Files are stored beneath the configured directory in separate UUID folders. POST /api/threads/{id}/messages accepts optional fileIds alongside attachmentIds (maximum 8 combined). Saved local paths are included in the Codex input; authenticated history and live user-message views expose safe files metadata cards instead of the generated path manifest. No generic arbitrary-path download API is added.

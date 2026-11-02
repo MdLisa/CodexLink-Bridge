@@ -14,6 +14,8 @@ fixed-tunnel.json
 fixed-tunnel.*.tmp
 console-settings.json
 console-settings.*.tmp
+execution-settings.json
+execution-settings.*.tmp
 autostart.json
 autostart.vbs
 autostart.lock
@@ -68,3 +70,9 @@ cert.pem
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Private attachment-directory settings and local document caches
+attachments-config.json
+attachments-config.*.tmp
+/attachments/
+/files/
