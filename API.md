@@ -8,6 +8,8 @@
 
 # 0.9.1 其他手机仅聊天会话的只读查看
 
+0.10.1 消息时间：普通和仅聊天历史/消息事件中，受支持 item 透传可选 `startedAtMs`、`completedAtMs`（Unix 毫秒），只接受有效整数。特权只读历史复用相同字段。缺失时省略，不用历史请求时间或整轮/任务时间补造；旧客户端可忽略新增字段。Android 0.9.2 用户消息优先开始时间，AI 优先完成时间，按本地时区显示。
+
 兼容 Android 0.9.0：保留原有接口的形状、权限、设备签名及模式代次。`GET /api/status` 仅新增可忽略的 `sharedChatAccess:{supported:true,enabled:boolean,revision:string}`；未授权设备默认 `enabled:false`，不会在原列表里增加其他手机的聊天。Android 0.9.1 连接旧后台缺少此字段时隐藏查看入口。
 
 电脑本机使用原管理密钥，POST `/admin/shared-chats`，JSON `{fingerprint,generation,enabled}`，仅允许设置当前代次已批准手机。通知对应设备 `shared-chat.settings.changed`（无 seq，内容为 enabled、revision）；旧客户端可忽略。手机不能自行授权。

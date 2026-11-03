@@ -12,6 +12,12 @@ const INSTRUCTIONS='本会话通过用户自己的手机连接本机 Codex。桌
 const terminal=new Set(['completed','failed','interrupted','cancelled','needsReview']);
 export function jobView(j){if(!j)return null;return{id:j.id,threadId:j.thread_id,messageId:j.message_id,state:j.state,turnId:j.turn_id,error:j.error,createdAt:j.created_at,updatedAt:j.updated_at,approvalsReviewer:j.approvals_reviewer??null};}
 export function itemView(i,imageView=()=>({available:false})){
+  const view=itemPayload(i,imageView);return view?{...view,...messageTimes(i)}:null;
+}
+export function messageTimes(item){
+  return Object.fromEntries(['startedAtMs','completedAtMs'].filter(key=>Number.isSafeInteger(item?.[key])&&item[key]>0&&item[key]<=253402300799999).map(key=>[key,item[key]]));
+}
+function itemPayload(i,imageView){
   if(!i)return null;
   if(i.type==='agentMessage')return{type:i.type,id:i.id,text:i.text,phase:i.phase};
   if(i.type==='userMessage')return{type:i.type,id:i.id,content:(i.content||[]).map(c=>c.type==='text'?{type:'text',text:c.text}:{type:c.type,attachment:true,image:imageView(c)})};

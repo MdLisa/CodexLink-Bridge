@@ -2,7 +2,7 @@ import {EventEmitter} from 'node:events';
 import {randomUUID} from 'node:crypto';
 import {readFileSync,readdirSync,existsSync,lstatSync,unlinkSync} from 'node:fs';
 import path from 'node:path';
-import {BridgeError,digest,jobView,itemView} from './bridge.mjs';
+import {BridgeError,digest,jobView,itemView,messageTimes} from './bridge.mjs';
 import {ChatOnlyRuntime} from './chat-only.mjs';
 
 const key=d=>d.device_key+':'+d.auth_generation;
@@ -27,7 +27,7 @@ export class ChatOnlyService extends EventEmitter{
   const runtime=await pending;this.assert(d);return runtime;
  }
  async create(body,d){this.assert(d);if(Object.keys(body).some(k=>k!=='name')||body.name!==undefined&&(typeof body.name!=='string'||body.name.length>100))throw new BridgeError(400,'CHAT_CONFIG_DENIED','仅聊天不接受电脑目录或工具配置。');const r=await this.runtime(d),chat=await r.create();this.assert(d);const time=Date.now()/1000|0;this.store.db.prepare('INSERT INTO chat_only_threads VALUES(?,?,?,?,?,?)').run(chat.id,d.device_key,d.auth_generation,body.name?.trim()||'仅聊天',time,time);return this.view(this.info(chat.id,d));}
- item(item,threadId,turnId){if(item?.type==='userMessage'){const job=this.store.jobForTurn(threadId,turnId);if(job){const p=JSON.parse(job.payload);return{type:'userMessage',id:item.id,content:[...(p.text?[{type:'text',text:p.text}]:[]),...p.attachmentIds.map(id=>({type:'image',attachment:true,image:{id,mime:this.store.upload(id)?.mime,available:Boolean(this.imageFile(id))}}))]};}}
+ item(item,threadId,turnId){if(item?.type==='userMessage'){const job=this.store.jobForTurn(threadId,turnId);if(job){const p=JSON.parse(job.payload);return{type:'userMessage',id:item.id,...messageTimes(item),content:[...(p.text?[{type:'text',text:p.text}]:[]),...p.attachmentIds.map(id=>({type:'image',attachment:true,image:{id,mime:this.store.upload(id)?.mime,available:Boolean(this.imageFile(id))}}))]};}}
   if(item?.type==='webSearch')return{type:'webSearch',id:item.id,status:item.status,query:item.query||''};return ['agentMessage','userMessage'].includes(item?.type)?itemView(item):null;
  }
  async history(id,params,d){this.info(id,d);const r=await this.runtime(d);if(!params.readOnly&&!this.store.db.prepare('SELECT 1 FROM jobs WHERE thread_id=? LIMIT 1').get(id))r.allowUnsentRecovery?.(id);const result=await r.history(id,params);this.assert(d);return{turns:(result.data||[]).map(t=>({id:t.id,storedStatus:t.status,items:(t.items||[]).map(i=>this.item(i,id,t.id)).filter(Boolean)})),nextCursor:result.nextCursor||null,liveStateFromHistory:false};}

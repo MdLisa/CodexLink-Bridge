@@ -82,6 +82,16 @@ test('restart preserves private chats and queued mode, never hands chat work to 
 
 const sharedRoot='/api/shared-chats/threads';
 const grant=(s,p,enabled=true)=>s.local('/admin/shared-chats',{fingerprint:p.fingerprint,generation:s.accounts.current().generation,enabled});
+test('original message timestamps remain identical through own, shared and restarted history reads',async t=>{
+ const s=await setup(t),v=await s.phone(),p=await s.phone();await s.set(p,'chat_only');await grant(s,v);const c=(await s.create(p)).data;
+ await s.submit(p,c.id);await until(()=>s.service.store.jobs(c.id)[0]?.state==='completed');
+ const native=s.engines[0].runtime.chats.get(c.id)[0].items;
+ native[0].startedAtMs=1793635200000;native[1].startedAtMs=1793635201000;native[1].completedAtMs=1793635260000;
+ for(const read of [()=>p.call(`/api/threads/${c.id}/history`),()=>v.call(`${sharedRoot}/${c.id}/history`)]){
+  const items=(await read()).data.turns[0].items;assert.equal(items[0].startedAtMs,native[0].startedAtMs);assert.equal(items[1].completedAtMs,native[1].completedAtMs);
+ }
+ await s.restart();assert.equal((await v.call(`${sharedRoot}/${c.id}/history`)).data.turns[0].items[1].completedAtMs,1793635260000);
+});
 test('shared viewing is opt-in, PC-admin-only, and persists without changing legacy phone endpoints',async t=>{
  const s=await setup(t),viewer=await s.phone(),source=await s.phone();await s.set(viewer,'chat_only');await s.set(source,'chat_only');
  const own=(await s.create(viewer)).data,other=(await s.create(source)).data;

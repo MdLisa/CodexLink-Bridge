@@ -48,7 +48,7 @@ $script:requestsOpen=$true
    <StackPanel DockPanel.Dock="Top"><TextBlock Text="CodexLink" FontSize="26" FontWeight="Bold" Foreground="White"/><TextBlock Text="电脑连接 · 管理控制台" Foreground="#9FB4C4" Margin="0,8,0,32"/>
     <Button x:Name="NavHome" Content="概览" Style="{StaticResource Nav}"/><Button x:Name="NavDevices" Content="手机设备" Style="{StaticResource Nav}"/><Button x:Name="NavSettings" Content="连接与设置" Style="{StaticResource Nav}"/><Button x:Name="NavLogs" Content="日志与诊断" Style="{StaticResource Nav}"/>
    </StackPanel>
-   <StackPanel DockPanel.Dock="Bottom" VerticalAlignment="Bottom"><TextBlock Text="v0.10.0" Foreground="#A6BCCB" Margin="0,0,0,10"/><TextBlock Text="关闭窗口后，已启动的连接继续运行。" Foreground="#91A9BA" TextWrapping="Wrap" LineHeight="21"/></StackPanel>
+   <StackPanel DockPanel.Dock="Bottom" VerticalAlignment="Bottom"><TextBlock Text="v0.10.1" Foreground="#A6BCCB" Margin="0,0,0,10"/><TextBlock Text="关闭窗口后，已启动的连接继续运行。" Foreground="#91A9BA" TextWrapping="Wrap" LineHeight="21"/></StackPanel>
   </DockPanel></Border>
   <Grid Grid.Column="1" Margin="30,26,30,16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
    <DockPanel Margin="0,0,0,22"><Button x:Name="Refresh" DockPanel.Dock="Right" Content="刷新状态" Margin="12,0,0,0"/><StackPanel><TextBlock x:Name="PageTitle" Text="连接概览" FontSize="27" FontWeight="SemiBold"/><TextBlock x:Name="PageSubtitle" Text="连接手机，管理你的电脑后台。" Style="{StaticResource Muted}" Margin="0,8,0,0"/></StackPanel></DockPanel>
