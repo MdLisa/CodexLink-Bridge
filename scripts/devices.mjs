@@ -6,6 +6,7 @@ import {ProjectAccess,defaultProjectRoots,validateScope} from '../src/project-ac
 import {DeviceApprovals} from '../src/device-approvals.mjs';
 import {executionSettings,reviewerLabel} from '../src/execution-settings.mjs';
 import {TakeoverPermissions} from '../src/desktop-takeover.mjs';
+import {SharedChatPermissions} from '../src/shared-chats.mjs';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -16,6 +17,7 @@ async function main(){
  const store=new Store(dir),security=new DeviceSecurity(store),access=new ProjectAccess(store,defaultProjectRoots(dir),()=>account.generation),rl=createInterface({input:process.stdin,output:process.stdout});
  const approvals=new DeviceApprovals(store,()=>executionSettings(dir).approvalsReviewer,()=>account.generation);
  const takeover=new TakeoverPermissions(store,()=>account.generation);
+ const chatViewer=new SharedChatPermissions(store,()=>account.generation);
  const approvalLabel=value=>{if(value==='chat_only')return'仅聊天（允许联网）';try{return reviewerLabel(value);}catch{return'配置损坏，请重新设置';}};
  const label=p=>p.mode==='all'?'所有目录（不限制聊天项目）':p.mode==='directories'&&Array.isArray(p.roots)?p.roots.join('、'):'配置损坏，请重新指定项目范围';
  async function configure(d){
@@ -59,17 +61,30 @@ async function main(){
   }else takeover.set(d.fingerprint,account.generation,enabled);
   console.log(enabled?'已授权此手机退出电脑端并接管。':'已关闭此手机的退出电脑端权限。');
  }
+ async function configureChatViewer(d){
+  console.log('当前查看其他手机仅聊天会话：'+(chatViewer.view(d.fingerprint,account.generation).enabled?'已授权（只读）':'未授权'));
+  console.log('开启后可查看其他已批准且处于仅聊天模式的手机会话及题目图片；不能代发消息、停止任务、修改会话或访问电脑项目。需要 Android 0.9.1，其他手机可继续使用 0.9.0。');
+  const choice=(await rl.question('1 开启只读查看；2 关闭；回车保留：')).trim();if(!choice)return;if(!['1','2'].includes(choice))throw Error('请输入 1 或 2。');
+  const enabled=choice==='1';if((await rl.question('输入 Y 保存，其他输入取消：')).trim().toUpperCase()!=='Y')return;
+  let runtime;try{runtime=JSON.parse(readFileSync(path.join(dir,'runtime.json'),'utf8'));}catch{}
+  if(runtime){const u=new URL(runtime.address);if(u.hostname!=='127.0.0.1'||u.protocol!=='http:')throw Error('后台管理地址无效。');
+   let response;try{response=await fetch(runtime.address+'/admin/shared-chats',{method:'POST',headers:{'x-bridge-admin':runtime.adminToken,'content-type':'application/json'},body:JSON.stringify({fingerprint:d.fingerprint,generation:account.generation,enabled}),signal:AbortSignal.timeout(5000)});}catch{throw Error('无法连接后台，请停止后台后再配置。');}
+   const result=await response.json();if(!response.ok)throw Error(result.error?.message||'保存失败，请更新后台。');
+  }else chatViewer.set(d.fingerprint,account.generation,enabled);
+  console.log(enabled?'已授权此手机只读查看其他手机的仅聊天会话。':'已关闭此手机的跨手机查看权限。');
+ }
  try{const devices=security.list().filter(d=>d.generation===account.generation);if(!devices.length){console.log('没有设备请求。请先在手机登录一次，看到核对码后重新进入手机审批菜单。');return;}
   console.log('只批准你正在操作的手机；请核对手机屏幕上的核对码。');
-  devices.forEach((d,i)=>console.log(`${i+1}. ${d.name}  ${d.status==='pending'?'等待批准':d.status==='approved'?'已批准':'已撤销'}  核对码：${d.code}\n   项目范围：${label(access.view(d.fingerprint,account.generation))}\n   操作审批：${approvalLabel(approvals.view(d.fingerprint,account.generation).approvalsReviewer)}\n   退出电脑端并接管：${takeover.view(d.fingerprint,account.generation)?'已授权':'未授权'}`));
+  devices.forEach((d,i)=>console.log(`${i+1}. ${d.name}  ${d.status==='pending'?'等待批准':d.status==='approved'?'已批准':'已撤销'}  核对码：${d.code}\n   项目范围：${label(access.view(d.fingerprint,account.generation))}\n   操作审批：${approvalLabel(approvals.view(d.fingerprint,account.generation).approvalsReviewer)}\n   退出电脑端并接管：${takeover.view(d.fingerprint,account.generation)?'已授权':'未授权'}\n   查看其他手机仅聊天会话：${chatViewer.view(d.fingerprint,account.generation).enabled?'已授权（只读）':'未授权'}`));
   const input=await rl.question('输入设备序号（回车退出）：');if(!input.trim())return;const d=devices[Number(input)-1];if(!d)throw Error('设备序号不正确。');
   console.log(`已选择：${d.name}  核对码：${d.code}`);
   if(process.argv.includes('--approvals')){await configureApprovals(d);return;}
-  const choice=(await rl.question('核对手机上的码一致后，输入 A 批准；P 项目范围；E 操作审批；T 退出电脑端并接管权限；R 撤销（回车取消）：')).trim().toUpperCase();
+  const choice=(await rl.question('核对手机上的码一致后，输入 A 批准；P 项目范围；E 操作审批；T 退出电脑端并接管；V 查看其他手机仅聊天会话；R 撤销（回车取消）：')).trim().toUpperCase();
   if(choice==='A'){await configure(d);await configureApprovals(d);security.approve(d.fingerprint,d.code,account.generation);console.log('已批准，请回手机再次点击登录。');}
   else if(choice==='P'){await configure(d);}
   else if(choice==='E'){await configureApprovals(d);}
   else if(choice==='T'){await configureTakeover(d);}
+  else if(choice==='V'){await configureChatViewer(d);}
   else if(choice==='R'){security.revoke(d.fingerprint);console.log('已撤销，该手机不能继续访问。');}
   else return;
   try{const r=JSON.parse(readFileSync(path.join(dir,'runtime.json'),'utf8'));const u=new URL(r.address);if(u.hostname==='127.0.0.1'&&u.protocol==='http:')await fetch(r.address+'/admin/auth-changed',{method:'POST',headers:{'x-bridge-admin':r.adminToken},signal:AbortSignal.timeout(3000)});}catch{}

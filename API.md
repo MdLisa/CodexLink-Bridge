@@ -1,3 +1,20 @@
+# 0.9.1 其他手机仅聊天会话的只读查看
+
+兼容 Android 0.9.0：保留原有接口的形状、权限、设备签名及模式代次。`GET /api/status` 仅新增可忽略的 `sharedChatAccess:{supported:true,enabled:boolean,revision:string}`；未授权设备默认 `enabled:false`，不会在原列表里增加其他手机的聊天。Android 0.9.1 连接旧后台缺少此字段时隐藏查看入口。
+
+电脑本机使用原管理密钥，POST `/admin/shared-chats`，JSON `{fingerprint,generation,enabled}`，仅允许设置当前代次已批准手机。通知对应设备 `shared-chat.settings.changed`（无 seq，内容为 enabled、revision）；旧客户端可忽略。手机不能自行授权。
+
+| 方法及路径 | 用途 |
+| --- | --- |
+| GET `/api/shared-chats/threads?cursor=…` | 已授权手机查看其他当前已批准、处于仅聊天模式的手机会话；每页 50 个，nextCursor |
+| GET `/api/shared-chats/threads/:id` | 元数据，control 为 sharedReadOnly；owner 仅含 name 和用于区分同名设备的 code（指纹后八位） |
+| GET `/api/shared-chats/threads/:id/history?limit=20&cursor=…` | 复用原历史形状，按源手机身份加载并过滤，返回前重检查看端与源手机权限；空草稿不创建会话 |
+| GET `/api/shared-chats/threads/:id/images/:imageId` | 只读图片，必须同时匹配当前会话绑定、仅聊天模式、上传设备和账号代次 |
+
+均要求原 Bearer token 与绑定完整路径（含查询参数）的设备签名。无权限返回 403 SHARED_CHAT_DENIED，来源不可查看返回 403 SHARED_CHAT_UNAVAILABLE。新命名空间下任何非 GET 请求返回 403 SHARED_CHAT_READ_ONLY；无任务、提问、上传、接管或编辑接口。原 `/api/uploads/:id` 不因查看权限扩大访问，原消息/停止/提问接口也继续拒绝代办。
+
+支持普通模式或仅聊天模式的查看端，只能读取其他手机的仅聊天会话，不包含电脑项目聊天。原实时/重放通道仍按原手机隔离，不转发对方任务或提问；查看页通过定时只读刷新更新。授权持久化且绑定设备身份和账号代次，撤销设备会清除其查看授权，重新批准需再次授予。
+
 # 0.3.0 设备绑定补充
 
 所有登录与任务请求必须按 DEVICE_SECURITY.md 提供设备签名。旧 token 不再可用；新设备先由电脑人工批准。下面保留聊天接口说明。

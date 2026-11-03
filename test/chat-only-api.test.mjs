@@ -24,7 +24,7 @@ class Runtime extends EventEmitter{
  constructor(chats){super();if(chats)this.chats=chats;}
  async start(){this.closed=false;}authExpiring(){return false;}
  async create(){const chat={id:randomUUID()};this.chats.set(chat.id,[]);return chat;}
- async history(id){return{data:this.chats.get(id)||[],nextCursor:null};}
+ async history(id,params={}){await this.historyGate?.();this.lastHistory=params;const turns=[...(this.chats.get(id)||[])].reverse(),offset=Number(params.cursor)||0,limit=params.limit||20;return{data:turns.slice(offset,offset+limit),nextCursor:offset+limit<turns.length?String(offset+limit):null};}
  async ask(id,input){this.inputs.push(input);const turnId=randomUUID();this.emit('notification',{method:'turn/started',params:{threadId:id,turn:{id:turnId}}});
   const finish=()=>{const items=[{type:'userMessage',id:randomUUID(),content:[{type:'text',text:input.text}]},{type:'agentMessage',id:randomUUID(),text:'safe answer'}];this.chats.get(id).push({id:turnId,status:'completed',items});for(const item of items)this.emit('notification',{method:'item/completed',params:{threadId:id,turnId,item}});return{text:'safe answer',turnId};};
   if(input.text==='hold'||input.text==='question')return new Promise((resolve,reject)=>{this.pending.set(id,{reject,resolve:()=>resolve(finish())});if(input.text==='question')this.emit('question',{id:'local-question',threadId:id,turnId,questions:[{id:'q',question:'Which number?'}]});});return finish();
@@ -78,4 +78,69 @@ test('mode revisions reject stale retries even after a full offline round trip b
 });
 test('restart preserves private chats and queued mode, never hands chat work to normal Codex, and deduplicates retry',async t=>{
  const s=await setup(t),p=await s.phone();await s.set(p,'chat_only');const chat=(await s.create(p)).data;const payload={text:'queued math',attachmentIds:[]};const {digest}=await import('../src/bridge.mjs');const job=s.service.store.insertJob({id:randomUUID(),threadId:chat.id,messageId:'restart-private-message',hash:digest(JSON.stringify(payload)),payload,deviceKey:p.fingerprint,authGeneration:s.accounts.current().generation,approvalsReviewer:'chat_only'});s.service.store.db.prepare("UPDATE jobs SET execution_mode='chat_only' WHERE id=?").run(job.id);await s.restart();await until(()=>s.service.store.job(job.id).state==='completed');assert.equal((await p.call('/api/threads')).data.threads[0].id,chat.id);assert.equal(s.rpc.turns.length,0);const duplicate=await p.call(`/api/threads/${chat.id}/messages`,{method:'POST',body:{messageId:'restart-private-message',...payload}});assert.equal(duplicate.data.duplicate,true);assert.equal(s.engines.at(-1).runtime.inputs.length,1);
+});
+
+const sharedRoot='/api/shared-chats/threads';
+const grant=(s,p,enabled=true)=>s.local('/admin/shared-chats',{fingerprint:p.fingerprint,generation:s.accounts.current().generation,enabled});
+test('shared viewing is opt-in, PC-admin-only, and persists without changing legacy phone endpoints',async t=>{
+ const s=await setup(t),viewer=await s.phone(),source=await s.phone();await s.set(viewer,'chat_only');await s.set(source,'chat_only');
+ const own=(await s.create(viewer)).data,other=(await s.create(source)).data;
+ assert.equal((await viewer.call('/api/status')).data.sharedChatAccess.enabled,false);
+ assert.equal((await viewer.call(sharedRoot)).status,403);
+ assert.equal((await viewer.call('/admin/shared-chats',{method:'POST',body:{fingerprint:viewer.fingerprint,generation:s.accounts.current().generation,enabled:true}})).status,403);
+ assert.equal((await grant(s,viewer)).status,200);
+ assert.deepEqual((await viewer.call('/api/threads')).data.threads.map(c=>c.id),[own.id]);
+ assert.deepEqual((await source.call('/api/threads')).data.threads.map(c=>c.id),[other.id]);
+ const listed=(await viewer.call(sharedRoot)).data.threads;assert.equal(listed.length,1);assert.equal(listed[0].id,other.id);assert.equal(listed[0].control,'sharedReadOnly');assert.equal(listed[0].owner.name,'test phone');assert.equal(listed[0].owner.code,source.fingerprint.slice(-8).toUpperCase());assert.ok(!JSON.stringify(listed).includes(source.fingerprint));
+ assert.equal((await viewer.call(`/api/threads/${other.id}/history`)).status,403);
+ await viewer.login();assert.equal((await viewer.call(sharedRoot)).status,200);await s.restart();assert.equal((await viewer.call('/api/status')).data.sharedChatAccess.enabled,true);
+ await s.set(viewer,'user');assert.equal((await viewer.call(sharedRoot)).status,200);assert.deepEqual((await viewer.call('/api/threads')).data.threads.map(c=>c.id),['coding']);
+ assert.equal((await source.call(sharedRoot)).status,403);assert.equal((await grant(s,viewer,false)).status,200);assert.equal((await viewer.call(sharedRoot)).status,403);
+});
+
+test('shared history paginates and only exposes images bound to that chat; old uploads remain owner-only',async t=>{
+ const s=await setup(t),v=await s.phone(),p=await s.phone();await s.set(p,'chat_only');await grant(s,v);const c=(await s.create(p)).data,other=(await s.create(p)).data;
+ const png=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),Buffer.alloc(24)]);
+ const upload=(await p.call('/api/uploads',{method:'POST',bytes:png})).data,unused=(await p.call('/api/uploads',{method:'POST',bytes:png})).data;
+ await s.submit(p,c.id,'first',{attachmentIds:[upload.id]});await until(()=>s.service.store.jobs(c.id)[0]?.state==='completed');await s.submit(p,c.id,'second');await until(()=>s.service.store.jobs(c.id).every(j=>j.state==='completed'));
+ const history=(await v.call(`${sharedRoot}/${c.id}/history?limit=1`)).data;assert.equal(history.turns.length,1);assert.equal(history.nextCursor,'1');
+ const older=(await v.call(`${sharedRoot}/${c.id}/history?limit=1&cursor=1`)).data;assert.ok(JSON.stringify(older).includes(upload.id));assert.ok(!JSON.stringify(older).includes(s.dataDir));assert.equal(s.engines[0].runtime.lastHistory.readOnly,true);
+ const image=await v.call(`${sharedRoot}/${c.id}/images/${upload.id}`);assert.equal(image.status,200);assert.deepEqual(image.data,png);
+ for(const route of [`/api/uploads/${upload.id}`,`${sharedRoot}/${other.id}/images/${upload.id}`,`${sharedRoot}/${c.id}/images/${unused.id}`,`${sharedRoot}/coding/images/${upload.id}`])assert.equal((await v.call(route)).status,403,route);
+ assert.equal((await p.call(`/api/uploads/${upload.id}`)).status,200);assert.equal((await p.call(`/api/threads/${c.id}/history`)).status,200);
+});
+
+test('view permission never permits sending, cancellations, approvals or coding access, and does not start empty chats',async t=>{
+ const s=await setup(t),v=await s.phone(),p=await s.phone();await s.set(v,'chat_only');await s.set(p,'chat_only');await grant(s,v);const c=(await s.create(p)).data;
+ const runtime=s.engines[0].runtime,originalHistory=runtime.history;runtime.history=()=>{throw Error('Empty shared draft must not load a runtime');};assert.deepEqual((await v.call(`${sharedRoot}/${c.id}/history`)).data.turns,[]);runtime.history=originalHistory;
+ await s.submit(p,c.id,'question');await until(()=>s.service.chatOnly.requests.size===1);const req=(await p.call('/api/status')).data.requests[0],job=s.service.store.jobs(c.id)[0];
+ for(const suffix of ['messages','acquire','release','takeover/prepare','name'])assert.equal((await v.call(`${sharedRoot}/${c.id}/${suffix}`,{method:'POST',body:{text:'steal'}})).status,403);
+ for(const method of ['POST','PUT','PATCH','DELETE'])assert.equal((await v.call(`${sharedRoot}/${c.id}`,{method,body:{name:'changed'}})).status,403);
+ for(const route of [`/api/threads/${c.id}/messages`,`/api/jobs/${job.id}/cancel`,`/api/requests/${req.id}/respond`])assert.equal((await v.call(route,{method:'POST',body:{messageId:randomUUID(),text:'no',answers:{q:{answers:['2']}}}})).status,403,route);
+ assert.equal((await v.call(`${sharedRoot}/coding/history`)).status,403);assert.equal(s.rpc.turns.length,0);assert.equal(runtime.inputs.length,1);assert.equal(s.service.chatOnly.requests.size,1);
+ assert.equal((await p.call(`/api/requests/${req.id}/respond`,{method:'POST',body:{answers:{q:{answers:['2']}}}})).status,200);
+});
+
+test('revocation and source mode changes are checked again after an in-flight history read',async t=>{
+ const s=await setup(t),v=await s.phone(),p=await s.phone();await s.set(p,'chat_only');await grant(s,v);const c=(await s.create(p)).data;await s.submit(p,c.id);await until(()=>s.service.store.jobs(c.id)[0]?.state==='completed');
+ const runtime=s.engines[0].runtime;
+ async function gated(change){let release,entered;const gate=new Promise(r=>release=r),ready=new Promise(r=>entered=r);runtime.historyGate=async()=>{entered();await gate;};const read=v.call(`${sharedRoot}/${c.id}/history`);await ready;await change();release();const result=await read;runtime.historyGate=null;assert.equal(result.status,403);assert.ok(!JSON.stringify(result.data).includes('safe answer'));}
+ await gated(()=>grant(s,v,false));await grant(s,v);await gated(()=>s.set(p,'user'));assert.equal((await v.call(sharedRoot)).data.threads.length,0);assert.equal((await v.call(`${sharedRoot}/${c.id}/history`)).status,403);
+ await s.set(p,'chat_only');assert.equal((await v.call(sharedRoot)).data.threads.length,1);s.service.security.revoke(p.fingerprint);assert.equal((await v.call(sharedRoot)).data.threads.length,0);
+ s.service.security.revoke(v.fingerprint);s.service.security.approve(v.fingerprint,s.service.security.code(v.fingerprint),s.accounts.current().generation);await v.login();assert.equal((await v.call('/api/status')).data.sharedChatAccess.enabled,false);
+});
+
+test('shared catalogs paginate without leaking old generations, coding chats, or revoked source devices',async t=>{
+ const s=await setup(t),v=await s.phone(),p=await s.phone();await s.set(p,'chat_only');await grant(s,v);const gen=s.accounts.current().generation;
+ const insert=s.service.store.db.prepare('INSERT INTO chat_only_threads VALUES(?,?,?,?,?,?)');for(let i=0;i<52;i++)insert.run(randomUUID(),p.fingerprint,gen,'math '+i,i,i);
+ insert.run(randomUUID(),p.fingerprint,'old-generation','OLD_PRIVATE_CANARY',0,999);const first=(await v.call(sharedRoot)).data,second=(await v.call(sharedRoot+'?cursor='+first.nextCursor)).data;
+ assert.equal(first.threads.length,50);assert.equal(second.threads.length,2);assert.equal(second.nextCursor,null);assert.equal(new Set([...first.threads,...second.threads].map(c=>c.id)).size,52);assert.ok(!JSON.stringify(first).includes('OLD_PRIVATE_CANARY'));assert.equal((await v.call(sharedRoot+'?cursor=NaN')).status,400);
+ s.service.sharedChatPermissions.set(v.fingerprint,gen,true);s.service.store.db.prepare('UPDATE device_chat_viewer SET generation=? WHERE fingerprint=?').run('old-generation',v.fingerprint);assert.equal((await v.call(sharedRoot)).status,403);
+});
+
+test('privileged viewing still receives no other-device live events, replays, jobs or questions',async t=>{
+ const s=await setup(t),v=await s.phone(),p=await s.phone();await s.set(v,'chat_only');await s.set(p,'chat_only');await grant(s,v);const c=(await s.create(p)).data,live=await s.socket(v);
+ await s.submit(p,c.id,'question');await until(()=>s.service.chatOnly.requests.size===1);await tick();assert.deepEqual((await v.call('/api/status')).data.requests,[]);assert.ok(!live.events.some(e=>JSON.stringify(e).includes(c.id)));
+ const replay=await s.socket(v);assert.ok(!replay.events.some(e=>JSON.stringify(e).includes(c.id)));assert.equal((await v.call(`/api/threads/${c.id}/jobs`)).status,403);assert.equal((await v.call(`${sharedRoot}/${c.id}/jobs`)).status,404);
+ const before=live.events.length;await grant(s,v,false);await until(()=>live.events.slice(before).some(e=>e.type==='shared-chat.settings.changed'&&e.data.enabled===false));
 });

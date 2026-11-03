@@ -10,6 +10,7 @@ import {Accounts} from '../src/accounts.mjs';
 import {startServer} from '../src/server.mjs';
 class Rpc extends EventEmitter{async start(){}async close(){this.emit('disconnected');}}
 const password='a-long-private-test-passphrase';const key=identity();
+async function waitForAuth(events){const deadline=Date.now()+5000;while(!events.some(e=>e.type==='authenticated')&&Date.now()<deadline)await new Promise(r=>setTimeout(r,20));assert.ok(events.some(e=>e.type==='authenticated'));}
 test('password login is required; password reset invalidates HTTP and live sockets, including after restart',async t=>{
  const dir=mkdtempSync(path.join(os.tmpdir(),'codex-account-')),workspace=path.join(dir,'workspace');mkdirSync(workspace);const dataDir=path.join(dir,'state');
  let server=await startServer({port:0,dataDir,roots:[workspace],rpc:new Rpc()});t.after(()=>server.close());
@@ -23,7 +24,7 @@ test('password login is required; password reset invalidates HTTP and live socke
  assert.equal((await call('/api/status',{token})).status,200);
  server.store.addDevice('legacy-device','legacy',await import('../src/bridge.mjs').then(m=>m.digest('old-pairing-token')));
  assert.equal((await call('/api/status',{token:'old-pairing-token'})).status,401);
- const ws=new WebSocket(server.address.replace('http:','ws:')+'/events');ws.on('error',()=>{});await once(ws,'open');const messages=[];ws.on('message',b=>messages.push(JSON.parse(b)));ws.send(JSON.stringify(wsProof(key,server.address,token)));await new Promise(r=>setTimeout(r,40));assert.ok(messages.some(e=>e.type==='authenticated'));
+ const ws=new WebSocket(server.address.replace('http:','ws:')+'/events');ws.on('error',()=>{});await once(ws,'open');const messages=[];ws.on('message',b=>messages.push(JSON.parse(b)));ws.send(JSON.stringify(wsProof(key,server.address,token)));await waitForAuth(messages);
  await accounts.set('owner',password+'-changed');assert.equal((await call('/api/status',{token})).status,401);
  const closed=once(ws,'close');server.bridge.event('private-after-reset',{value:'must not reach old device'});assert.equal((await closed)[0],4003);assert.equal(messages.some(e=>e.type==='private-after-reset'),false);
  approve(server,key,accounts.current().generation);const fresh=await call('/api/login',{body:{username:'owner',password:password+'-changed'}});assert.equal(fresh.status,201);

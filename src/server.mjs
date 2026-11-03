@@ -10,13 +10,14 @@ import {executionSettings,reviewerValue} from './execution-settings.mjs';
 import {ProjectAccess,permits,validateScope} from './project-access.mjs';
 import {DeviceApprovals,validateReviewer} from './device-approvals.mjs';
 import {ChatOnlyService} from './chat-only-service.mjs';
+import {SharedChatPermissions,SharedChatReader} from './shared-chats.mjs';
 import {TakeoverPermissions,TakeoverManager,WindowsDesktopController} from './desktop-takeover.mjs';
 import {Store,now} from './store.mjs';
 import {RpcClient} from './rpc.mjs';
 import {DeviceSecurity} from './device-security.mjs';
 import {Accounts} from './accounts.mjs';
 import {Bridge,BridgeError,digest,jobView} from './bridge.mjs';
-export const VERSION='0.8.0';
+export const VERSION='0.9.1';
 function equal(a,b){const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y);}
 function imageMime(b){if(b.length>=24&&b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))return'image/png';if(b.length>=4&&b[0]===255&&b[1]===216&&b[2]===255)return'image/jpeg';if(b.length>=12&&b.toString('ascii',0,4)==='RIFF'&&b.toString('ascii',8,12)==='WEBP')return'image/webp';if(b.length>=10&&/^GIF8[79]a$/.test(b.toString('ascii',0,6)))return'image/gif';return null;}
 async function readBody(req,max){if(req.deviceBody){if(req.deviceBody.length>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');return req.deviceBody;}if(Number(req.headers['content-length'])>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');let size=0;const chunks=[];for await(const b of req){size+=b.length;if(size>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');chunks.push(b);}req.deviceBody=Buffer.concat(chunks);return req.deviceBody;}
@@ -43,6 +44,7 @@ export async function startServer(options={}){
     for(const j of store.queued())if(j.device_key&&!j.approvals_reviewer){try{store.snapshotReviewer(j.id,deviceApprovals.get({device_key:j.device_key,auth_generation:j.auth_generation}).approvalsReviewer);}catch{store.updateJob(j.id,'failed',{error:'原提交手机的审批配置已失效，排队任务未执行。'});}}
     const rpc=options.rpc||new RpcClient({exe:options.codexExe});bridge=new Bridge({rpc,store,roots,uploadDir,files:new FileUploads(store,dataDir),accessResolver:d=>projectAccess.get(d),approvalResolver:d=>{if(transitions.has(d.device_key))throw new BridgeError(409,'MODE_CHANGING','手机模式正在切换，请稍后重试。');return deviceApprovals.get(d);},approvalPolicy:options.approvalPolicy||'on-request',approvalsReviewer:reviewer});
     const takeoverPermissions=new TakeoverPermissions(store,()=>accounts.current()?.generation);
+    const sharedChatPermissions=new SharedChatPermissions(store,()=>accounts.current()?.generation);
     const desktopController=options.desktopController||new WindowsDesktopController({protectedPids:()=>[process.pid,rpc.proc?.pid].filter(Number.isSafeInteger)});
     const allowedOrigins=new Set(options.allowedOrigins||[]);let address;
     function attachmentAllowed(id,device){const current=mode(device),owner=store.attachmentOwner(id);if(current==='chat_only'||owner?.execution_mode==='chat_only')return Boolean(current==='chat_only'&&owner?.execution_mode==='chat_only'&&owner.device_key===device.device_key&&owner.generation===device.auth_generation);const scope=projectAccess.get(device),threads=store.attachmentThreads(id);if(threads.length)return threads.some(t=>permits(scope,t.workspace));return Boolean(owner&&owner.device_key===device.device_key&&owner.generation===device.auth_generation);}
@@ -52,6 +54,7 @@ export async function startServer(options={}){
     function validDevice(d){return Boolean(d&&accounts.current()?.generation===d.auth_generation&&store.activeDevice(d.id)&&security.approved(d.device_key,d.auth_generation));}
     takeover=new TakeoverManager({bridge,permissions:takeoverPermissions,controller:desktopController,validDevice:d=>validDevice(d)&&mode(d)==='operate'});
     chatOnly=new ChatOnlyService({store,dataDir,exe:options.codexExe,runtimeFactory:options.chatRuntimeFactory,refreshAuth:()=>rpc.request('account/read',{refreshToken:true}),validOwner:d=>{try{return !transitions.has(d.device_key)&&accounts.current()?.generation===d.auth_generation&&security.approved(d.device_key,d.auth_generation)&&mode(d)==='chat_only';}catch{return false;}},imageFile:id=>bridge.imageFile(id),requireImage:requireAttachment});
+    const sharedChats=new SharedChatReader({store,chatOnly,permissions:sharedChatPermissions,validViewer:validDevice});
     function resolveDevice(hash){const d=store.auth(hash);return validDevice(d)?d:null;}
     function auth(req){const h=req.headers.authorization;if(typeof h!=='string'||!h.startsWith('Bearer '))throw new BridgeError(401,'AUTH_REQUIRED','请先登录。');const device=resolveDevice(digest(h.slice(7)));if(!device)throw new BridgeError(401,'AUTH_INVALID','登录已失效，请重新输入账号密码登录。');return device;}
     function originAllowed(req){const origin=req.headers.origin;if(!origin)return true;return allowedOrigins.has(origin)||origin===address||origin===address?.replace('127.0.0.1','localhost');}
@@ -91,6 +94,13 @@ export async function startServer(options={}){
            reply(res,200,{executionSettings:updated});return;
           }finally{transitions.delete(b.fingerprint);}
         }
+        if(u.pathname==='/admin/shared-chats'){
+          if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||!equal(req.headers['x-bridge-admin']||'',adminToken))throw new BridgeError(403,'ADMIN_REQUIRED','只能在电脑设备管理中授权查看其他手机会话。');
+          if(req.method!=='POST')throw new BridgeError(405,'METHOD_NOT_ALLOWED','请求方式不正确。');
+          const b=await jsonBody(req),updated=sharedChatPermissions.set(b.fingerprint,b.generation,b.enabled);
+          for(const ws of wss.clients)if(ws.device?.device_key===b.fingerprint)send(ws,{type:'shared-chat.settings.changed',data:updated});
+          reply(res,200,{sharedChatAccess:updated});return;
+        }
         if(u.pathname==='/admin/desktop-takeover'){
           if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||!equal(req.headers['x-bridge-admin']||'',adminToken))throw new BridgeError(403,'ADMIN_REQUIRED','只能在电脑设备管理中授权桌面接管。');
           if(req.method!=='POST')throw new BridgeError(405,'METHOD_NOT_ALLOWED','请求方式不正确。');
@@ -122,7 +132,20 @@ export async function startServer(options={}){
         security.proof(security.lookup(device.device_key).public_key,{token:req.headers.authorization.slice(7),method:req.method,host:req.headers.host,path:req.url,time:req.headers['x-device-time'],nonce:req.headers['x-device-nonce'],signature:req.headers['x-device-signature'],body:requestBody});
         if(parts[0]!=='api')throw new BridgeError(404,'NOT_FOUND','接口不存在。');
         const chatMode=mode(device)==='chat_only';
-        if(req.method==='GET'&&u.pathname==='/api/status'){const settings=deviceApprovals.get(device),scope=chatMode?{mode:'chat_only',roots:[],revision:'chat_only:'+settings.modeRevision}:projectAccess.get(device);reply(res,200,{version:VERSION,online:chatMode?true:bridge.online,projectAccess:scope,executionSettings:settings,desktopTakeover:{enabled:!chatMode&&takeoverPermissions.get(device),supported:!chatMode&&desktopController.supported},workspaces:chatMode?[]:scope.mode==='all'?bridge.roots:scope.roots,deviceId:device.id,approvalsReviewer:settings.approvalsReviewer,capabilities:{chatOnly:true,perDeviceProjects:true,perDeviceApprovals:true,desktopTakeover:!chatMode,text:true,images:true,files:!chatMode,fileLimitBytes:10*1024*1024,historyRefresh:true,queue:true,approvals:!chatMode,computerUse:false,liveDesktopTakeover:false},requests:chatMode?chatOnly.requestsFor(device):[...bridge.requests.values()].filter(r=>requestAllowed(r,device)).map(r=>bridge.requestView(r))});return;}
+        if(req.method==='GET'&&u.pathname==='/api/status'){const settings=deviceApprovals.get(device),scope=chatMode?{mode:'chat_only',roots:[],revision:'chat_only:'+settings.modeRevision}:projectAccess.get(device);reply(res,200,{version:VERSION,online:chatMode?true:bridge.online,projectAccess:scope,executionSettings:settings,sharedChatAccess:{supported:true,...sharedChatPermissions.get(device)},desktopTakeover:{enabled:!chatMode&&takeoverPermissions.get(device),supported:!chatMode&&desktopController.supported},workspaces:chatMode?[]:scope.mode==='all'?bridge.roots:scope.roots,deviceId:device.id,approvalsReviewer:settings.approvalsReviewer,capabilities:{chatOnly:true,perDeviceProjects:true,perDeviceApprovals:true,desktopTakeover:!chatMode,text:true,images:true,files:!chatMode,fileLimitBytes:10*1024*1024,historyRefresh:true,queue:true,approvals:!chatMode,computerUse:false,liveDesktopTakeover:false},requests:chatMode?chatOnly.requestsFor(device):[...bridge.requests.values()].filter(r=>requestAllowed(r,device)).map(r=>bridge.requestView(r))});return;}
+        if(parts[1]==='shared-chats'){
+          sharedChats.require(device);
+          if(req.method!=='GET')throw new BridgeError(403,'SHARED_CHAT_READ_ONLY','其他手机会话仅支持查看，不能发送消息或操作任务。');
+          if(parts[2]==='threads'){
+            if(parts.length===3){reply(res,200,sharedChats.list(u.searchParams.get('cursor'),device));return;}
+            if(parts.length===4){reply(res,200,sharedChats.info(parts[3],device));return;}
+            if(parts.length===5&&parts[4]==='history'){reply(res,200,await sharedChats.history(parts[3],{cursor:u.searchParams.get('cursor'),limit:Number(u.searchParams.get('limit'))||20},device));return;}
+            if(parts.length===6&&parts[4]==='images'){
+              const {upload,file}=sharedChats.image(parts[3],parts[5],device);res.writeHead(200,{'content-type':upload.mime,'content-length':upload.size,'cache-control':'no-store','x-content-type-options':'nosniff'});const stream=createReadStream(file);stream.on('error',()=>res.destroy());stream.pipe(res);return;
+            }
+          }
+          throw new BridgeError(404,'NOT_FOUND','只读查看接口不存在。');
+        }
         if(req.method==='GET'&&u.pathname==='/api/devices'){reply(res,200,{devices:store.devices().filter(d=>{const target=store.activeDevice(d.id);return validDevice(target)&&target.device_key===device.device_key;})});return;}
         if(req.method==='DELETE'&&parts.length===3&&parts[1]==='devices'){
           if(store.activeDevice(parts[2])?.device_key!==device.device_key)throw new BridgeError(403,'DEVICE_DENIED','手机只能移除自己的连接，其他设备请在电脑管理。');
@@ -196,7 +219,7 @@ export async function startServer(options={}){
     const port=server.address().port;address='http://'+(options.host==='0.0.0.0'?'127.0.0.1':options.host||'127.0.0.1')+':'+port;
     try{unlinkSync(path.join(dataDir,'本机配对码.json'));}catch{} 
     writeFileSync(runtimeFile,JSON.stringify({pid:process.pid,instanceId,address,adminToken,roots},null,2));
-    service={address,port,bridge,store,dataDir,security,projectAccess,deviceApprovals,takeoverPermissions,takeover,chatOnly,async close(){if(closed)return;closed=true;clearInterval(pairingTimer);clearInterval(heartbeat);clearInterval(chatTimer);for(const ws of wss.clients)ws.terminate();await takeover.close();await chatOnly.close();await new Promise(resolve=>server.close(resolve));await bridge.close();store.close();try{if(JSON.parse(readFileSync(runtimeFile,'utf8')).instanceId===instanceId)unlinkSync(runtimeFile);}catch{}unlock();}};return service;
+    service={address,port,bridge,store,dataDir,security,projectAccess,deviceApprovals,takeoverPermissions,takeover,chatOnly,sharedChatPermissions,sharedChats,async close(){if(closed)return;closed=true;clearInterval(pairingTimer);clearInterval(heartbeat);clearInterval(chatTimer);for(const ws of wss.clients)ws.terminate();await takeover.close();await chatOnly.close();await new Promise(resolve=>server.close(resolve));await bridge.close();store.close();try{if(JSON.parse(readFileSync(runtimeFile,'utf8')).instanceId===instanceId)unlinkSync(runtimeFile);}catch{}unlock();}};return service;
   }catch(e){clearInterval(pairingTimer);clearInterval(heartbeat);clearInterval(chatTimer);try{for(const ws of wss?.clients||[])ws.terminate();server?.close();await takeover?.close();await chatOnly?.close();await bridge?.close();}catch{}try{store?.close();}catch{}unlock();throw e;}
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){

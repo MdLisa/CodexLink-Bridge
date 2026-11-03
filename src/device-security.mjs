@@ -20,7 +20,7 @@ export class DeviceSecurity{
  }
  list(){return this.db.prepare('SELECT * FROM trusted_devices ORDER BY created_at DESC').all().map(r=>({...r,code:this.code(r.fingerprint)}));}
  approve(fingerprint,code,generation){const r=this.lookup(fingerprint);if(!r||r.generation!==generation||code.toUpperCase().replaceAll('-','')!==this.code(fingerprint).replaceAll('-',''))throw Error('核对码不匹配或请求已失效，没有批准。');this.db.prepare("UPDATE trusted_devices SET status='approved' WHERE fingerprint=?").run(fingerprint);}
- revoke(fingerprint){this.db.prepare("UPDATE trusted_devices SET status='revoked' WHERE fingerprint=?").run(fingerprint);this.db.prepare('UPDATE devices SET revoked_at=? WHERE device_key=?').run(new Date().toISOString(),fingerprint);}
+ revoke(fingerprint){this.db.prepare("UPDATE trusted_devices SET status='revoked' WHERE fingerprint=?").run(fingerprint);this.db.prepare('UPDATE devices SET revoked_at=? WHERE device_key=?').run(new Date().toISOString(),fingerprint);if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_chat_viewer'").get())this.db.prepare('DELETE FROM device_chat_viewer WHERE fingerprint=?').run(fingerprint);}
  proof(encoded,{signature,...data}){
   const p=this.publicKey(encoded),time=Number(data.time),nonce=data.nonce;
   if(!Number.isSafeInteger(time)||Math.abs(Date.now()-time)>180000)throw deny('手机时间与电脑相差较大，请打开系统自动时间后重试。');

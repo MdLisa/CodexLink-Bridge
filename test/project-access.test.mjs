@@ -13,6 +13,7 @@ import {startServer} from '../src/server.mjs';
 import {identity,headers,wsProof,approve} from './identity-helper.mjs';
 
 const tick=()=>new Promise(r=>setTimeout(r,35));
+async function waitForAuth(events){const deadline=Date.now()+5000;while(!events.some(e=>e.type==='authenticated')&&Date.now()<deadline)await tick();assert.ok(events.some(e=>e.type==='authenticated'));}
 const closers=new Map();
 function scratch(t){const root=mkdtempSync(path.join(os.tmpdir(),'codex-projects-'));t.after(async()=>{await closers.get(root)?.();closers.delete(root);if(path.dirname(root)!==path.resolve(os.tmpdir())||!path.basename(root).startsWith('codex-projects-'))throw Error('Unsafe cleanup');rmSync(root,{recursive:true,force:true});});return root;}
 class Rpc extends EventEmitter{
@@ -141,7 +142,7 @@ test('policies, login identities, attachment links and scoped replay persist aft
  const a=s.service.bridge.event('thread.event',{threadId:'a',private:'A'}),b=s.service.bridge.event('thread.event',{threadId:'b',private:'B'});
  await s.restart([s.b]);assert.deepEqual((await p.call('/api/status')).data.projectAccess.roots,[s.a]);assert.deepEqual((await q.call('/api/status')).data.projectAccess.roots,[s.b]);
  assert.equal((await p.call('/api/uploads/'+uploaded.id)).status,200);assert.equal((await q.call('/api/uploads/'+uploaded.id)).status,403);
- const ws=new WebSocket(s.service.address.replace('http:','ws:')+'/events');t.after(()=>ws.terminate());const events=[];ws.on('message',wire=>events.push(JSON.parse(wire)));await once(ws,'open');ws.send(JSON.stringify(wsProof(p.key,s.service.address,p.token)));await tick();
+ const ws=new WebSocket(s.service.address.replace('http:','ws:')+'/events');t.after(()=>ws.terminate());const events=[];ws.on('message',wire=>events.push(JSON.parse(wire)));await once(ws,'open');ws.send(JSON.stringify(wsProof(p.key,s.service.address,p.token)));await waitForAuth(events);
  assert.ok(events.some(e=>e.seq===a.seq));assert.ok(!events.some(e=>e.seq===b.seq));
 });
 
