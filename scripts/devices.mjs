@@ -4,9 +4,10 @@ import {Accounts} from '../src/accounts.mjs';
 import {DeviceSecurity} from '../src/device-security.mjs';
 import {ProjectAccess,defaultProjectRoots,validateScope} from '../src/project-access.mjs';
 import {DeviceApprovals} from '../src/device-approvals.mjs';
-import {executionSettings,reviewerLabel} from '../src/execution-settings.mjs';
+import {defaultDeviceSettings,reviewerLabel} from '../src/execution-settings.mjs';
 import {TakeoverPermissions} from '../src/desktop-takeover.mjs';
 import {SharedChatPermissions} from '../src/shared-chats.mjs';
+import {Management} from './management.mjs';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -15,7 +16,7 @@ async function main(){
  if(!process.stdin.isTTY)throw Error('请打开“控制台.cmd”，进入“设置与手机审批 → 审批 / 撤销手机”。');
  const account=new Accounts(dir).current();if(!account)throw Error('请先设置账号密码。');
  const store=new Store(dir),security=new DeviceSecurity(store),access=new ProjectAccess(store,defaultProjectRoots(dir),()=>account.generation),rl=createInterface({input:process.stdin,output:process.stdout});
- const approvals=new DeviceApprovals(store,()=>executionSettings(dir).approvalsReviewer,()=>account.generation);
+ const approvals=new DeviceApprovals(store,()=>defaultDeviceSettings(dir).approvalsReviewer,()=>account.generation);
  const takeover=new TakeoverPermissions(store,()=>account.generation);
  const chatViewer=new SharedChatPermissions(store,()=>account.generation);
  const approvalLabel=value=>{if(value==='chat_only')return'仅聊天（允许联网）';try{return reviewerLabel(value);}catch{return'配置损坏，请重新设置';}};
@@ -75,16 +76,18 @@ async function main(){
  }
  try{const devices=security.list().filter(d=>d.generation===account.generation);if(!devices.length){console.log('没有设备请求。请先在手机登录一次，看到核对码后重新进入手机审批菜单。');return;}
   console.log('只批准你正在操作的手机；请核对手机屏幕上的核对码。');
-  devices.forEach((d,i)=>console.log(`${i+1}. ${d.name}  ${d.status==='pending'?'等待批准':d.status==='approved'?'已批准':'已撤销'}  核对码：${d.code}\n   项目范围：${label(access.view(d.fingerprint,account.generation))}\n   操作审批：${approvalLabel(approvals.view(d.fingerprint,account.generation).approvalsReviewer)}\n   退出电脑端并接管：${takeover.view(d.fingerprint,account.generation)?'已授权':'未授权'}\n   查看其他手机仅聊天会话：${chatViewer.view(d.fingerprint,account.generation).enabled?'已授权（只读）':'未授权'}`));
+  devices.forEach((d,i)=>console.log(`${i+1}. ${d.note?d.note+'（'+d.name+'）':d.name}  ${d.status==='pending'?'等待批准':d.status==='approved'?'已批准':'已撤销'}  核对码：${d.code}\n   项目范围：${label(access.view(d.fingerprint,account.generation))}\n   操作审批：${approvalLabel(approvals.view(d.fingerprint,account.generation).approvalsReviewer)}\n   退出电脑端并接管：${takeover.view(d.fingerprint,account.generation)?'已授权':'未授权'}\n   查看其他手机仅聊天会话：${chatViewer.view(d.fingerprint,account.generation).enabled?'已授权（只读）':'未授权'}`));
   const input=await rl.question('输入设备序号（回车退出）：');if(!input.trim())return;const d=devices[Number(input)-1];if(!d)throw Error('设备序号不正确。');
   console.log(`已选择：${d.name}  核对码：${d.code}`);
   if(process.argv.includes('--approvals')){await configureApprovals(d);return;}
-  const choice=(await rl.question('核对手机上的码一致后，输入 A 批准；P 项目范围；E 操作审批；T 退出电脑端并接管；V 查看其他手机仅聊天会话；R 撤销（回车取消）：')).trim().toUpperCase();
+  const choice=(await rl.question('核对手机上的码一致后，输入 A 批准；P 项目范围；E 操作审批；T 退出电脑端并接管；V 只读查看；N 备注；D 删除设备；R 撤销（回车取消）：')).trim().toUpperCase();
   if(choice==='A'){await configure(d);await configureApprovals(d);security.approve(d.fingerprint,d.code,account.generation);console.log('已批准，请回手机再次点击登录。');}
   else if(choice==='P'){await configure(d);}
   else if(choice==='E'){await configureApprovals(d);}
   else if(choice==='T'){await configureTakeover(d);}
   else if(choice==='V'){await configureChatViewer(d);}
+  else if(choice==='N'){const note=await rl.question('输入备注（回车清空，最多 80 字）：');await new Management({dir}).device('note',{fingerprint:d.fingerprint,generation:account.generation,note});console.log('备注已保存，仅电脑可见。');}
+  else if(choice==='D'){if((await rl.question('删除登记、登录凭据和授权，保留聊天及附件。再次登录需重新批准。输入 Y 确认：')).trim().toUpperCase()!=='Y')return;await new Management({dir}).device('delete',{fingerprint:d.fingerprint,generation:account.generation});console.log('设备已删除。');}
   else if(choice==='R'){security.revoke(d.fingerprint);console.log('已撤销，该手机不能继续访问。');}
   else return;
   try{const r=JSON.parse(readFileSync(path.join(dir,'runtime.json'),'utf8'));const u=new URL(r.address);if(u.hostname==='127.0.0.1'&&u.protocol==='http:')await fetch(r.address+'/admin/auth-changed',{method:'POST',headers:{'x-bridge-admin':r.adminToken},signal:AbortSignal.timeout(3000)});}catch{}

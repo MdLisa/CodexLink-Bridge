@@ -4,7 +4,7 @@ import {EventEmitter} from 'node:events';
 import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import {executionSettings,setExecutionSettings} from '../src/execution-settings.mjs';
+import {executionSettings,defaultDeviceSettings,setExecutionSettings,reviewerLabel} from '../src/execution-settings.mjs';
 import {startServer} from '../src/server.mjs';
 
 const services=new Map();
@@ -30,6 +30,17 @@ test('reviewer configuration defaults to manual and rejects invalid or full-acce
   assert.throws(()=>setExecutionSettings(dir,'never'));assert.equal(executionSettings(dir).approvalsReviewer,'auto_review');
   writeFileSync(path.join(dir,'execution-settings.json'),'{broken');assert.throws(()=>executionSettings(dir));
   writeFileSync(path.join(dir,'execution-settings.json'),JSON.stringify({approvalsReviewer:'accept-all'}));assert.throws(()=>executionSettings(dir));
+});
+
+test('chat-only phone defaults stay separate from the legacy coding reviewer',t=>{
+  const dir=scratch(t);setExecutionSettings(dir,'auto_review');
+  assert.deepEqual(setExecutionSettings(dir,'chat_only'),{approvalsReviewer:'chat_only'});
+  assert.equal(defaultDeviceSettings(dir).approvalsReviewer,'chat_only');
+  assert.equal(executionSettings(dir).approvalsReviewer,'auto_review');
+  assert.equal(reviewerLabel('chat_only'),'仅聊天（允许联网）');
+  assert.throws(()=>setExecutionSettings(dir,'full-access'));assert.equal(defaultDeviceSettings(dir).approvalsReviewer,'chat_only');
+  setExecutionSettings(dir,'user');assert.equal(defaultDeviceSettings(dir).approvalsReviewer,'user');assert.equal(executionSettings(dir).approvalsReviewer,'user');
+  writeFileSync(path.join(dir,'execution-settings.json'),JSON.stringify({approvalsReviewer:'auto_review'}));assert.equal(defaultDeviceSettings(dir).approvalsReviewer,'auto_review');
 });
 
 test('automatic review applies to new, resumed and already-loaded chats without widening sandbox or autoanswering requests',async t=>{

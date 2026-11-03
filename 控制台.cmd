@@ -1,6 +1,11 @@
 @echo off
 chcp 65001 >nul
 setlocal
+if "%~1"=="" (
+ start "" "%SystemRoot%\System32\wscript.exe" "%~dp0控制台.vbs"
+ exit /b 0
+)
+if /i "%~1"=="--cli" shift
 set "BRIDGE_NODE="
 for /f "delims=" %%N in ('where node.exe 2^>nul') do if not defined BRIDGE_NODE set "BRIDGE_NODE=%%N"
 if not defined BRIDGE_NODE set "BRIDGE_NODE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"

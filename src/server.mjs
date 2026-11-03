@@ -6,7 +6,7 @@ import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {WebSocketServer,WebSocket} from 'ws';
 import {FileUploads} from './files.mjs';
-import {executionSettings,reviewerValue} from './execution-settings.mjs';
+import {executionSettings,defaultDeviceSettings,reviewerValue} from './execution-settings.mjs';
 import {ProjectAccess,permits,validateScope} from './project-access.mjs';
 import {DeviceApprovals,validateReviewer} from './device-approvals.mjs';
 import {ChatOnlyService} from './chat-only-service.mjs';
@@ -17,7 +17,7 @@ import {RpcClient} from './rpc.mjs';
 import {DeviceSecurity} from './device-security.mjs';
 import {Accounts} from './accounts.mjs';
 import {Bridge,BridgeError,digest,jobView} from './bridge.mjs';
-export const VERSION='0.9.1';
+export const VERSION='0.10.0';
 function equal(a,b){const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y);}
 function imageMime(b){if(b.length>=24&&b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))return'image/png';if(b.length>=4&&b[0]===255&&b[1]===216&&b[2]===255)return'image/jpeg';if(b.length>=12&&b.toString('ascii',0,4)==='RIFF'&&b.toString('ascii',8,12)==='WEBP')return'image/webp';if(b.length>=10&&/^GIF8[79]a$/.test(b.toString('ascii',0,6)))return'image/gif';return null;}
 async function readBody(req,max){if(req.deviceBody){if(req.deviceBody.length>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');return req.deviceBody;}if(Number(req.headers['content-length'])>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');let size=0;const chunks=[];for await(const b of req){size+=b.length;if(size>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');chunks.push(b);}req.deviceBody=Buffer.concat(chunks);return req.deviceBody;}
@@ -39,7 +39,8 @@ export async function startServer(options={}){
     const reviewer=options.approvalsReviewer===undefined?()=>executionSettings(dataDir).approvalsReviewer:()=>reviewerValue(options.approvalsReviewer);reviewer();
     const accounts=new Accounts(dataDir),security=new DeviceSecurity(store);
     const projectAccess=new ProjectAccess(store,roots,()=>accounts.current()?.generation);
-    const deviceApprovals=new DeviceApprovals(store,reviewer,()=>accounts.current()?.generation);
+    const phoneReviewer=options.approvalsReviewer===undefined?()=>defaultDeviceSettings(dataDir).approvalsReviewer:reviewer;
+    const deviceApprovals=new DeviceApprovals(store,phoneReviewer,()=>accounts.current()?.generation);
     const mode=d=>deviceApprovals.get(d).approvalsReviewer==='chat_only'?'chat_only':'operate';
     for(const j of store.queued())if(j.device_key&&!j.approvals_reviewer){try{store.snapshotReviewer(j.id,deviceApprovals.get({device_key:j.device_key,auth_generation:j.auth_generation}).approvalsReviewer);}catch{store.updateJob(j.id,'failed',{error:'原提交手机的审批配置已失效，排队任务未执行。'});}}
     const rpc=options.rpc||new RpcClient({exe:options.codexExe});bridge=new Bridge({rpc,store,roots,uploadDir,files:new FileUploads(store,dataDir),accessResolver:d=>projectAccess.get(d),approvalResolver:d=>{if(transitions.has(d.device_key))throw new BridgeError(409,'MODE_CHANGING','手机模式正在切换，请稍后重试。');return deviceApprovals.get(d);},approvalPolicy:options.approvalPolicy||'on-request',approvalsReviewer:reviewer});
@@ -63,11 +64,33 @@ export async function startServer(options={}){
       try{
         if(!originAllowed(req))throw new BridgeError(403,'ORIGIN_DENIED','不允许此网页来源访问后台。');
         const u=new URL(req.url,'http://localhost');const parts=u.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-        if(req.method==='GET'&&u.pathname==='/health'){reply(res,200,{service:'codex-phone-bridge',version:VERSION,ready:bridge.online,authMode:'password',deviceSecurity:true,deviceAuthority:req.headers.host,accountConfigured:Boolean(accounts.current()),instanceId});return;}
+        if(req.method==='GET'&&u.pathname==='/health'){reply(res,200,{service:'codex-phone-bridge',version:VERSION,ready:bridge.online,authMode:'password',deviceSecurity:true,localDeviceManagement:true,deviceAuthority:req.headers.host,accountConfigured:Boolean(accounts.current()),instanceId});return;}
         if(req.method==='POST'&&u.pathname==='/admin/stop'){
           const local=['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
           if(!local||!equal(req.headers['x-bridge-admin']||'',adminToken))throw new BridgeError(403,'ADMIN_REQUIRED','只能通过本机管理程序停止后台。');
           reply(res,200,{stopping:true});setImmediate(()=>service?.close().catch(e=>options.onError?.(e)));return;
+        }
+        if(u.pathname==='/admin/devices'){
+          if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||!equal(req.headers['x-bridge-admin']||'',adminToken))throw new BridgeError(403,'ADMIN_REQUIRED','只能在本机管理手机。');
+          if(req.method!=='POST')throw new BridgeError(405,'METHOD_NOT_ALLOWED','请求方式不正确。');
+          const b=await jsonBody(req),d=security.lookup(b.fingerprint);
+          if(!d||d.generation!==b.generation||b.generation!==accounts.current()?.generation)throw new BridgeError(400,'INVALID_DEVICE','设备请求已失效，请刷新列表。');
+          if(b.action==='note'){security.note(d.fingerprint,d.generation,b.note);reply(res,200,{updated:true});return;}
+          if(b.action==='approve'){
+            if(d.status==='approved')throw new BridgeError(400,'INVALID_DEVICE','该手机已批准，请刷新列表。');
+            projectAccess.initialize(d.fingerprint,d.generation);deviceApprovals.initialize(d.fingerprint,d.generation);
+            security.approve(d.fingerprint,b.code,d.generation);reply(res,200,{approved:true});return;
+          }
+          if(!['delete','revoke'].includes(b.action))throw new BridgeError(400,'INVALID_ACTION','设备操作无效。');
+          if(transitions.has(d.fingerprint)||inflight.get(d.fingerprint)||takeover.running||store.db.prepare("SELECT 1 FROM jobs WHERE device_key=? AND state IN ('starting','running','waitingApproval') LIMIT 1").get(d.fingerprint))throw new BridgeError(409,'TASK_PENDING','该手机还有运行中的任务或请求，请先停止或等待完成，再重试。');
+          transitions.add(d.fingerprint);
+          try{
+            for(const j of store.queued(null))if(j.device_key===d.fingerprint)store.updateJob(j.id,'cancelled',{error:'设备已移除或撤销，排队任务已取消。'});
+            await chatOnly.closeOwner({device_key:d.fingerprint,auth_generation:d.generation});
+            if(b.action==='delete')security.forget(d.fingerprint,d.generation);else security.revoke(d.fingerprint);
+            for(const ws of wss.clients)if(ws.device?.device_key===d.fingerprint)ws.close(4003,'Device removed');
+            reply(res,200,{updated:true});return;
+          }finally{transitions.delete(d.fingerprint);}
         }
         if(u.pathname==='/admin/project-access'){
           if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||!equal(req.headers['x-bridge-admin']||'',adminToken))throw new BridgeError(403,'ADMIN_REQUIRED','只能在电脑控制台修改手机项目范围。');
@@ -121,7 +144,7 @@ export async function startServer(options={}){
           const publicKey=security.proof(b.publicKey,{token:'',method:'POST',host:req.headers.host,path:req.url,time:req.headers['x-device-time'],nonce:req.headers['x-device-nonce'],signature:req.headers['x-device-signature'],body:req.deviceBody});
           const registration=security.enroll(publicKey.encoded,b.deviceName,account.generation);
           if(registration.status==='revoked')throw new BridgeError(403,'DEVICE_REVOKED','这台手机已被撤销，请在电脑上重新批准。');
-          if(registration.status!=='approved'){reply(res,202,{approvalRequired:true,verificationCode:security.code(publicKey.fingerprint),message:'请在电脑双击“审批手机.cmd”，核对码一致后批准，再回手机点击登录。'});return;}
+          if(registration.status!=='approved'){reply(res,202,{approvalRequired:true,verificationCode:security.code(publicKey.fingerprint),message:'请在电脑打开 CodexLink 控制台 → 手机设备，核对码一致后批准，再回手机点击登录。'});return;}
           const name=typeof b.deviceName==='string'?b.deviceName.trim().slice(0,80):'安卓手机';const token=randomBytes(32).toString('base64url'),id=randomUUID();
           projectAccess.initialize(publicKey.fingerprint,account.generation);deviceApprovals.initialize(publicKey.fingerprint,account.generation);store.addDevice(id,name||'安卓手机',digest(token),account.generation,publicKey.fingerprint);reply(res,201,{device:{id,name:name||'安卓手机'},token});return;
         }

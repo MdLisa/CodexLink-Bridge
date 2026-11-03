@@ -1,36 +1,26 @@
 import {createInterface} from 'node:readline/promises';
 import {spawn,spawnSync} from 'node:child_process';
-import {existsSync,readFileSync,mkdirSync,writeFileSync,renameSync,rmSync,statSync} from 'node:fs';
-import {randomUUID} from 'node:crypto';
+import {existsSync,statSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {configuredFileRoot} from '../src/files.mjs';
-import {executionSettings,reviewerLabel} from '../src/execution-settings.mjs';
-import {startupSetting,cancelPendingStartup,startupCancelled,repairStartupLocation} from './startup-settings.mjs';
+import {defaultDeviceSettings,reviewerLabel} from '../src/execution-settings.mjs';
+import {startupSetting,repairStartupLocation} from './startup-settings.mjs';
+import {Management,saveJson} from './management.mjs';
 
 const dir=process.env.BRIDGE_DATA_DIR||path.join(process.env.LOCALAPPDATA||os.homedir(),'CodexPhoneBridge');
-const settingsFile=path.join(dir,'console-settings.json');
+const management=new Management({dir});
 const scripts=path.dirname(fileURLToPath(import.meta.url));
-function read(name){try{return JSON.parse(readFileSync(path.join(dir,name),'utf8'));}catch{return null;}}
-function localAddress(value){try{const u=new URL(value);return u.protocol==='http:'&&u.hostname==='127.0.0.1'&&!u.username&&!u.password&&!u.search&&!u.hash&&u.pathname==='/'?u.origin:null;}catch{return null;}}
 async function health(address){try{if(!address)return null;const r=await fetch(address+'/health',{signal:AbortSignal.timeout(4000),redirect:'error'});if(!r.ok)return null;return await r.json();}catch{return null;}}
 function options(){
- const saved=read('console-settings.json'),runtime=read('runtime.json');
- let port=18766;try{port=Number(new URL(runtime.address).port)||18766;}catch{}
- return {workspace:saved?.workspace||runtime?.roots?.[0]||path.join(os.homedir(),'Documents','Codex'),port:Number.isInteger(saved?.port)&&saved.port>0&&saved.port<65536?saved.port:port};
+ return management.options();
 }
 function save(value){
- mkdirSync(dir,{recursive:true});const temp=path.join(dir,`console-settings.${randomUUID()}.tmp`);
- try{writeFileSync(temp,JSON.stringify(value,null,2),{flag:'wx'});renameSync(temp,settingsFile);}finally{rmSync(temp,{force:true});}
+ saveJson(dir,'console-settings.json',value);
 }
 async function overview(){
- const runtime=read('runtime.json'),external=read('external.json'),fixed=read('fixed-tunnel.json');
- const [backendHealth,tunnelHealth]=await Promise.all([health(localAddress(runtime?.address)),health(localAddress(external?.control))]);
- const backend=Boolean(runtime&&backendHealth&&backendHealth.service==='codex-phone-bridge'&&backendHealth.instanceId===runtime.instanceId&&backendHealth.ready===true);
- const tunnel=Boolean(external&&tunnelHealth&&tunnelHealth.instanceId===external.instanceId&&tunnelHealth.ready===true);
- const address=external?.url||(fixed?.hostname?'https://'+fixed.hostname:null);
- return {backend,tunnel,address,instanceId:backend?runtime.instanceId:null,runtime,external};
+ return management.overview();
 }
 async function display(checkPublic=false){
  const s=await overview(),selected=options();
@@ -39,7 +29,7 @@ async function display(checkPublic=false){
  console.log('手机地址：'+(s.address||'尚未配置'));
  console.log('项目目录：'+selected.workspace);
  console.log('附件目录：'+configuredFileRoot(dir));
- console.log('新手机默认审批：'+reviewerLabel(executionSettings(dir).approvalsReviewer)+'（已配置手机按各自设置）');
+ console.log('新手机默认审批：'+reviewerLabel(defaultDeviceSettings(dir).approvalsReviewer)+'（已配置手机按各自设置）');
  if(s.backend&&s.runtime.roots?.[0]!==selected.workspace)console.log('当前运行目录：'+s.runtime.roots?.[0]+'（新目录将在下次停止并启动后生效）');
  if(checkPublic&&s.backend&&s.tunnel&&s.address){
   console.log('正在检查固定入口是否可达……');
@@ -67,24 +57,12 @@ async function run(file,args=[],interactive=false){
  if(r.error||r.status!==0)throw Error((r.stderr||r.stdout||r.error?.message||'操作未完成，请查看后台日志。').trim());
 }
 async function start(autoStartedAt=0){
- if(!autoStartedAt)cancelPendingStartup();
- const checkCancelled=()=>{if(autoStartedAt&&startupCancelled(autoStartedAt))throw Error('本次自动启动已取消。');};
- checkCancelled();
- const value=options();if(!existsSync(value.workspace)||!statSync(value.workspace).isDirectory())throw Error('项目目录不存在，请先到设置里修改目录。');
- save(value);
- console.log('正在启动电脑后台……');await run('manage.mjs',['start','--workspace',value.workspace,'--host','0.0.0.0','--port',String(value.port)]);
- checkCancelled();
- console.log('正在连接外网……');await run('external.mjs',['start']);
- checkCancelled();
+ await management.start({autoStartedAt,onProgress:message=>console.log(message)});
  console.log('\n手机连接已启动。');await display();
  console.log('\n现在可以关闭这个窗口；后台和外网会继续运行。');
 }
 async function stop(){
- cancelPendingStartup();
- // Persist the selected workspace before manage.mjs removes runtime.json.
- save(options());
- console.log('正在关闭外网……');await run('external.mjs',['stop']);
- console.log('正在停止电脑后台……');await run('manage.mjs',['stop']);
+ await management.stop({onProgress:message=>console.log(message)});
  console.log('手机连接已停止。');
 }
 async function changeWorkspace(){

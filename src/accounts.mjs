@@ -16,7 +16,7 @@ export class Accounts{
   mkdirSync(this.dir,{recursive:true});const temp=this.file+'.'+randomUUID()+'.tmp';writeFileSync(temp,JSON.stringify(account,null,2),{flag:'wx',mode:0o600});renameSync(temp,this.file);return account;
  }
  async verify(username,password){
-  const a=this.current();if(!a)throw new AccountError(503,'ACCOUNT_NOT_CONFIGURED','请先在电脑后台文件夹双击“设置账号密码.cmd”，设置本机账号密码。');
+  const a=this.current();if(!a)throw new AccountError(503,'ACCOUNT_NOT_CONFIGURED','请先打开电脑控制台 → 连接与设置，设置本机账号密码。');
   if(Date.now()>=this.until){this.attempts=0;this.until=Date.now()+60000;}
   if(this.attempts>=5||this.busy)throw new AccountError(429,'LOGIN_RATE_LIMIT','登录尝试过于频繁，请一分钟后再试。');
   this.attempts++;this.busy=true;

@@ -1,5 +1,11 @@
 # Device protocol v1
 
+## Windows control panel (0.10.0)
+
+The native control panel uses an independent per-launch secret on an ephemeral loopback-only management port. Browser origins and unexpected Host headers are rejected. Online device changes use the backend's authenticated local administration routes; an unreadable or unverified runtime/lock never triggers an offline permission write. The window does not start or stop the phone service merely by opening or closing.
+
+Local device notes are bound to fingerprint and account generation and are not returned to phones. Forgetting a device removes enrollment, login sessions, notes and device policies, cancels queued jobs and closes live sessions. Active jobs or in-flight device reads prevent deletion. Chat history and attachments remain linked to their existing owner. Re-enrollment requires fresh approval, old tokens stay invalid, and elevated permissions are not inherited. Nonces remain until normal expiry to prevent replay after re-enrollment.
+
 POST /api/login takes username, password, deviceName, publicKey (Base64 DER SubjectPublicKeyInfo, P-256). The same signed-request headers described below are required, with an empty token. An unapproved key returns 202 with approvalRequired and verificationCode, never a token. Enrollment is only created after valid password verification. Local CLI approval is mandatory.
 
 Authenticated requests require Authorization: Bearer TOKEN and x-device-time (epoch milliseconds), x-device-nonce (unique UUID), x-device-signature (Base64 DER SHA256withECDSA signature). All of these bytes are signed as UTF-8, newline-separated:

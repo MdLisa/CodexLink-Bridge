@@ -1,9 +1,9 @@
 {
   "name": "codex-phone-bridge",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=24.0.0" },
-  "scripts": { "start": "node src/server.mjs", "test": "node --test test/*.test.mjs" },
+  "scripts": { "start": "node src/server.mjs", "gui": "node scripts/gui.mjs", "test": "node --test test/*.test.mjs" },
   "dependencies": { "ws": "8.22.0" }
 }

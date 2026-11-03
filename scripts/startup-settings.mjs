@@ -7,12 +7,12 @@ import {fileURLToPath} from 'node:url';
 
 export const stateDir=process.env.BRIDGE_DATA_DIR||path.join(process.env.LOCALAPPDATA||os.homedir(),'CodexPhoneBridge');
 const scripts=path.dirname(fileURLToPath(import.meta.url));
-export function cancelPendingStartup(){
- mkdirSync(stateDir,{recursive:true});const temp=path.join(stateDir,`startup-cancel.${randomUUID()}.tmp`);
- try{writeFileSync(temp,JSON.stringify({at:Date.now()}),{flag:'wx'});renameSync(temp,path.join(stateDir,'startup-cancel.json'));}finally{rmSync(temp,{force:true});}
+export function cancelPendingStartup(dir=stateDir){
+ mkdirSync(dir,{recursive:true});const temp=path.join(dir,`startup-cancel.${randomUUID()}.tmp`);
+ try{writeFileSync(temp,JSON.stringify({at:Date.now()}),{flag:'wx'});renameSync(temp,path.join(dir,'startup-cancel.json'));}finally{rmSync(temp,{force:true});}
 }
-export function startupCancelled(startedAt){
- try{return JSON.parse(readFileSync(path.join(stateDir,'startup-cancel.json'),'utf8')).at>=startedAt;}catch{return false;}
+export function startupCancelled(startedAt,dir=stateDir){
+ try{return JSON.parse(readFileSync(path.join(dir,'startup-cancel.json'),'utf8')).at>=startedAt;}catch{return false;}
 }
 export function repairStartupLocation(){
  const status=startupSetting();if(!status.enabled)return false;
