@@ -1,3 +1,7 @@
+# 0.10.2 安卓更新分发
+
+新增公开只读 `GET/HEAD /updates/android/latest.json` 与 `GET/HEAD /updates/android/CodexLink-<versionName>-<versionCode>-<sha256前16位>.apk`。仅提供独立更新目录中的版本信息和安装包，不要求手机登录，不提供写入和目录列表；原聊天和管理认证保持不变。版本信息禁用缓存，安装包文件名不可变。字段、发布与客户端校验见 [ANDROID_UPDATES.md](ANDROID_UPDATES.md)。
+
 # 0.10.0 本机图形控制台
 
 新增 `POST /admin/devices`，仅接受回环来源与后台 `x-bridge-admin` 凭据；手机 token 与设备签名不能调用。JSON 公共字段为 `{fingerprint,generation,action}`，绑定当前账号代次。`note` 另带 `note`（最多 80 个字符，无控制字符，空字符串清空）；`approve` 另带手机 `code`；`revoke` 撤销授权；`delete` 删除设备登记、登录凭据、备注与设备策略，并保留聊天／附件及归属。

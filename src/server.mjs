@@ -17,7 +17,8 @@ import {RpcClient} from './rpc.mjs';
 import {DeviceSecurity} from './device-security.mjs';
 import {Accounts} from './accounts.mjs';
 import {Bridge,BridgeError,digest,jobView} from './bridge.mjs';
-export const VERSION='0.10.1';
+import {serveAndroidUpdate} from './android-updates.mjs';
+export const VERSION='0.10.2';
 function equal(a,b){const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y);}
 function imageMime(b){if(b.length>=24&&b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))return'image/png';if(b.length>=4&&b[0]===255&&b[1]===216&&b[2]===255)return'image/jpeg';if(b.length>=12&&b.toString('ascii',0,4)==='RIFF'&&b.toString('ascii',8,12)==='WEBP')return'image/webp';if(b.length>=10&&/^GIF8[79]a$/.test(b.toString('ascii',0,6)))return'image/gif';return null;}
 async function readBody(req,max){if(req.deviceBody){if(req.deviceBody.length>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');return req.deviceBody;}if(Number(req.headers['content-length'])>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');let size=0;const chunks=[];for await(const b of req){size+=b.length;if(size>max)throw new BridgeError(413,'BODY_TOO_LARGE','上传内容太大。');chunks.push(b);}req.deviceBody=Buffer.concat(chunks);return req.deviceBody;}
@@ -64,6 +65,7 @@ export async function startServer(options={}){
       try{
         if(!originAllowed(req))throw new BridgeError(403,'ORIGIN_DENIED','不允许此网页来源访问后台。');
         const u=new URL(req.url,'http://localhost');const parts=u.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+        if(await serveAndroidUpdate(req,res,u,options.updatesDir||path.resolve(fileURLToPath(new URL('../updates/android/',import.meta.url)))))return;
         if(req.method==='GET'&&u.pathname==='/health'){reply(res,200,{service:'codex-phone-bridge',version:VERSION,ready:bridge.online,authMode:'password',deviceSecurity:true,localDeviceManagement:true,deviceAuthority:req.headers.host,accountConfigured:Boolean(accounts.current()),instanceId});return;}
         if(req.method==='POST'&&u.pathname==='/admin/stop'){
           const local=['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress);

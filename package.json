@@ -1,6 +1,6 @@
 {
   "name": "codex-phone-bridge",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "private": true,
   "type": "module",
   "engines": { "node": ">=24.0.0" },

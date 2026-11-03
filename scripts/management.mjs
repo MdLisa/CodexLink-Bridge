@@ -67,7 +67,7 @@ export class Management{
   const connection=await this.overview(),account=new Accounts(this.dir).current();let startup=null,startupError='',devices=[],deviceError='';
   try{if(!this.startupCache||this.startupCache.until<Date.now())this.startupCache={value:this.startup(),until:Date.now()+30000};startup=this.startupCache.value;}catch{startupError='无法读取开机自启状态';}
   try{devices=this.devices();}catch{deviceError='设备配置暂时无法读取，请查看本机日志或刷新。';}
-  return{version:'0.10.1',...connection,busy:this.busy,settings:{...this.options(),attachments:configuredFileRoot(this.dir),username:account?.username||'',defaultReviewer:defaultDeviceSettings(this.dir).approvalsReviewer,hostname:readJson(this.dir,'fixed-tunnel.json')?.hostname||'',fixedConfigured:Boolean(readJson(this.dir,'fixed-tunnel.json')),startup:startup?.enabled??null,startupError},devices,deviceError};
+  return{version:'0.10.2',...connection,busy:this.busy,settings:{...this.options(),attachments:configuredFileRoot(this.dir),username:account?.username||'',defaultReviewer:defaultDeviceSettings(this.dir).approvalsReviewer,hostname:readJson(this.dir,'fixed-tunnel.json')?.hostname||'',fixedConfigured:Boolean(readJson(this.dir,'fixed-tunnel.json')),startup:startup?.enabled??null,startupError},devices,deviceError};
  }
  assertOffline(){if(existsSync(path.join(this.dir,'runtime.json'))||existsSync(path.join(this.dir,'bridge.lock')))throw Error('后台状态无法确认，请从原控制台停止后台或完成更新后重试；没有离线改写权限。');}
  async admin(route,body,{optional=false}={}){

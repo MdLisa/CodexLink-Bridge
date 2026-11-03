@@ -79,3 +79,5 @@ attachments-config.*.tmp
 /files/
 /.gui-test/
 /CodexLink.exe
+/updates/
+/LOCAL_DEVELOPMENT.md
