@@ -78,6 +78,7 @@ $script:requestsOpen=$true
        <ComboBox x:Name="DeviceReviewer"><ComboBoxItem Content="手动审批" Tag="user"/><ComboBoxItem Content="帮我批准（官方自动审查）" Tag="auto_review"/><ComboBoxItem Content="仅聊天（允许联网）" Tag="chat_only"/></ComboBox><Button x:Name="SaveDeviceReviewer" Content="保存操作方式" HorizontalAlignment="Left"/>
        <TextBlock Text="单独授权" FontWeight="SemiBold" Margin="0,18,0,0"/>
        <CheckBox x:Name="TakeoverPermission" Content="允许退出桌面 Codex 并接管"/><Button x:Name="SaveTakeover" Content="保存接管权限" HorizontalAlignment="Left"/>
+       <CheckBox x:Name="DownloadPermission" Content="允许下载生成文档（仅操作模式，单文件 20 MB）"/><Button x:Name="SaveDownloads" Content="保存文档下载权限" HorizontalAlignment="Left"/>
        <CheckBox x:Name="ViewerPermission" Content="允许只读查看其他手机的仅聊天会话"/><Button x:Name="SaveViewer" Content="保存只读查看权限" HorizontalAlignment="Left"/>
        <TextBlock Text="删除设备会清理登记、登录凭据、备注和授权。聊天及附件保留；该手机再次登录时需重新批准。" Style="{StaticResource Muted}" Margin="0,18,0,0"/>
       </StackPanel>
@@ -133,11 +134,11 @@ function Update-DeviceList {
  $ui.DeviceList.Items.Clear()
  foreach($device in $items){$label=if($device.note){$device.note}else{$device.name};$status=@{pending='等待批准';approved='已批准';revoked='已撤销'}[$device.status];$device|Add-Member -NotePropertyName displayName -NotePropertyValue $label -Force;$device|Add-Member -NotePropertyName subtitle -NotePropertyValue ($status+' · '+$device.name+"`n"+$device.code) -Force;[void]$ui.DeviceList.Items.Add($device);if($device.fingerprint -eq $selectedFingerprint){$ui.DeviceList.SelectedItem=$device}}
  $script:updating=$false;$ui.DeviceEmpty.Visibility=if($items.Count -eq 0){'Visible'}else{'Collapsed'}
- if($selectedFingerprint -and -not @($script:state.devices|Where-Object{$_.fingerprint -eq $selectedFingerprint}).Count){$script:selected=$null;$ui.DeviceEditor.IsEnabled=$false;$ui.DeviceTitle.Text='选择一台手机';$ui.DeviceIdentity.Text='设备已从列表移除。';$ui.DeviceNote.Clear();$ui.DeviceCode.Clear();$ui.DeviceRoots.Clear();$ui.TakeoverPermission.IsChecked=$false;$ui.ViewerPermission.IsChecked=$false}
+ if($selectedFingerprint -and -not @($script:state.devices|Where-Object{$_.fingerprint -eq $selectedFingerprint}).Count){$script:selected=$null;$ui.DeviceEditor.IsEnabled=$false;$ui.DeviceTitle.Text='选择一台手机';$ui.DeviceIdentity.Text='设备已从列表移除。';$ui.DeviceNote.Clear();$ui.DeviceCode.Clear();$ui.DeviceRoots.Clear();$ui.TakeoverPermission.IsChecked=$false;$ui.ViewerPermission.IsChecked=$false;$ui.DownloadPermission.IsChecked=$false}
 }
 function Load-Device($device){
  if(-not $device){return};$script:selected=$device;$ui.DeviceTitle.Text=if($device.note){$device.note}else{$device.name};$ui.DeviceIdentity.Text=$device.name+' · '+@{pending='等待批准';approved='已批准';revoked='已撤销'}[$device.status]+"`n运行中的任务："+$device.activeTasks
- $ui.DeviceNote.Text=$device.note;$ui.DeviceCode.Text=$device.code;Select-Tag $ui.DeviceScope $device.scope.mode;$ui.DeviceRoots.Text=$device.scope.roots -join "`r`n";Select-Tag $ui.DeviceReviewer $device.reviewer;$ui.TakeoverPermission.IsChecked=$device.takeover;$ui.ViewerPermission.IsChecked=$device.viewer
+ $ui.DeviceNote.Text=$device.note;$ui.DeviceCode.Text=$device.code;Select-Tag $ui.DeviceScope $device.scope.mode;$ui.DeviceRoots.Text=$device.scope.roots -join "`r`n";Select-Tag $ui.DeviceReviewer $device.reviewer;$ui.TakeoverPermission.IsChecked=$device.takeover;$ui.ViewerPermission.IsChecked=$device.viewer;$ui.DownloadPermission.IsChecked=$device.downloads
  $ui.ApproveDevice.IsEnabled=$device.status -ne 'approved';$ui.RevokeDevice.IsEnabled=$device.status -eq 'approved';$ui.SaveViewer.IsEnabled=$device.status -eq 'approved';$ui.DeviceEditor.IsEnabled=-not $script:busy
 }
 function Apply-State($value){
@@ -173,6 +174,7 @@ $ui.AddDeviceRoot.Add_Click({$folder=Choose-Folder '';if($folder){$ui.DeviceRoot
 $ui.SaveDeviceScope.Add_Click({$mode=$ui.DeviceScope.SelectedItem.Tag;$roots=@();if($mode -eq 'directories'){$roots=@($ui.DeviceRoots.Text -split '\r?\n'|ForEach-Object{$_.Trim()}|Where-Object{$_})};if($mode -ne 'all' -or (Confirm-Action '允许访问所有目录？这会扩大该手机的项目范围。')){Run-Device 'scope' @{scope=@{mode=$mode;roots=$roots}}}})
 $ui.SaveDeviceReviewer.Add_Click({if(Confirm-Action '保存此手机的操作方式？切换仅聊天模式需等待运行中的任务结束，旧模式排队任务会取消。'){Run-Device 'reviewer' @{reviewer=$ui.DeviceReviewer.SelectedItem.Tag}}})
 $ui.SaveTakeover.Add_Click({if(-not $ui.TakeoverPermission.IsChecked -or (Confirm-Action '允许该手机在确认后退出整个桌面 Codex 并接管？可能中断电脑上的其他任务。')){Run-Device 'takeover' @{enabled=[bool]$ui.TakeoverPermission.IsChecked}}})
+$ui.SaveDownloads.Add_Click({Run-Device 'downloads' @{enabled=[bool]$ui.DownloadPermission.IsChecked}})
 $ui.SaveViewer.Add_Click({if(-not $ui.ViewerPermission.IsChecked -or (Confirm-Action '允许该手机只读查看其他已批准手机的仅聊天记录和图片？')){Run-Device 'viewer' @{enabled=[bool]$ui.ViewerPermission.IsChecked}}})
 $ui.ChooseWorkspace.Add_Click({$folder=Choose-Folder $ui.Workspace.Text;if($folder){$ui.Workspace.Text=$folder}})
 $ui.ChooseAttachments.Add_Click({$folder=Choose-Folder $ui.Attachments.Text;if($folder){$ui.Attachments.Text=$folder}})

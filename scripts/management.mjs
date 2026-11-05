@@ -10,6 +10,7 @@ import {DeviceSecurity} from '../src/device-security.mjs';
 import {ProjectAccess,validateScope,directory} from '../src/project-access.mjs';
 import {DeviceApprovals,validateReviewer} from '../src/device-approvals.mjs';
 import {TakeoverPermissions} from '../src/desktop-takeover.mjs';
+import {GeneratedFilePermissions} from '../src/generated-files.mjs';
 import {SharedChatPermissions} from '../src/shared-chats.mjs';
 import {defaultDeviceSettings,setExecutionSettings,defaultReviewerValue} from '../src/execution-settings.mjs';
 import {configuredFileRoot} from '../src/files.mjs';
@@ -58,7 +59,7 @@ export class Management{
     let scope;try{scope=JSON.parse(row('device_project_access',d)?.policy||'null');}catch{}
     return{fingerprint:d.fingerprint,generation:d.generation,name:d.name,note:d.note,code:d.code,status:d.status,createdAt:d.created_at,
      scope:scope||{mode:'directories',roots:[this.options().workspace]},reviewer:row('device_approvals',d)?.reviewer||defaultDeviceSettings(this.dir).approvalsReviewer,
-     takeover:row('device_takeover',d)?.enabled===1,viewer:row('device_chat_viewer',d)?.enabled===1,
+     downloads:row('device_generated_files',d)?.enabled===1,takeover:row('device_takeover',d)?.enabled===1,viewer:row('device_chat_viewer',d)?.enabled===1,
      activeTasks:Number(store.db.prepare("SELECT count(*) AS n FROM jobs WHERE device_key=? AND state IN ('starting','running','waitingApproval')").get(d.fingerprint).n)};
    });
   }finally{store.close();}
@@ -67,7 +68,7 @@ export class Management{
   const connection=await this.overview(),account=new Accounts(this.dir).current();let startup=null,startupError='',devices=[],deviceError='';
   try{if(!this.startupCache||this.startupCache.until<Date.now())this.startupCache={value:this.startup(),until:Date.now()+30000};startup=this.startupCache.value;}catch{startupError='无法读取开机自启状态';}
   try{devices=this.devices();}catch{deviceError='设备配置暂时无法读取，请查看本机日志或刷新。';}
-  return{version:'0.10.2',...connection,busy:this.busy,settings:{...this.options(),attachments:configuredFileRoot(this.dir),username:account?.username||'',defaultReviewer:defaultDeviceSettings(this.dir).approvalsReviewer,hostname:readJson(this.dir,'fixed-tunnel.json')?.hostname||'',fixedConfigured:Boolean(readJson(this.dir,'fixed-tunnel.json')),startup:startup?.enabled??null,startupError},devices,deviceError};
+  return{version:'0.11.0',...connection,busy:this.busy,settings:{...this.options(),attachments:configuredFileRoot(this.dir),username:account?.username||'',defaultReviewer:defaultDeviceSettings(this.dir).approvalsReviewer,hostname:readJson(this.dir,'fixed-tunnel.json')?.hostname||'',fixedConfigured:Boolean(readJson(this.dir,'fixed-tunnel.json')),startup:startup?.enabled??null,startupError},devices,deviceError};
  }
  assertOffline(){if(existsSync(path.join(this.dir,'runtime.json'))||existsSync(path.join(this.dir,'bridge.lock')))throw Error('后台状态无法确认，请从原控制台停止后台或完成更新后重试；没有离线改写权限。');}
  async admin(route,body,{optional=false}={}){
@@ -83,7 +84,7 @@ export class Management{
   const data={fingerprint:d.fingerprint,generation:d.generation};let route='/admin/devices',body={...data,action};
   if(action==='scope'){const scope=validateScope(b.scope);route='/admin/project-access';body={...data,...scope};}
   else if(action==='reviewer'){route='/admin/device-approvals';body={...data,approvalsReviewer:validateReviewer(b.reviewer)};}
-  else if(action==='takeover'||action==='viewer'){if(typeof b.enabled!=='boolean')throw Error('权限设置无效。');route=action==='takeover'?'/admin/desktop-takeover':'/admin/shared-chats';body={...data,enabled:b.enabled};}
+  else if(action==='takeover'||action==='viewer'||action==='downloads'){if(typeof b.enabled!=='boolean')throw Error('权限设置无效。');route=action==='downloads'?'/admin/generated-files':action==='takeover'?'/admin/desktop-takeover':'/admin/shared-chats';body={...data,enabled:b.enabled};}
   else if(action==='note')body.note=b.note;
   else if(action==='approve'){if(b.code!==d.code)throw Error('请核对手机上的核对码。');body.code=b.code;}
   else if(!['delete','revoke'].includes(action))throw Error('设备操作无效。');
@@ -99,6 +100,7 @@ export class Management{
     if((old==='chat_only')!==(b.reviewer==='chat_only')){if(d.activeTasks)throw Error('请先停止或等待该手机任务结束。');for(const j of store.queued(null))if(j.device_key===d.fingerprint)store.updateJob(j.id,'cancelled',{error:'聊天模式已切换。'});}
     approvals.set(d.fingerprint,d.generation,b.reviewer);
    }else if(action==='takeover')new TakeoverPermissions(store,current).set(d.fingerprint,d.generation,b.enabled);
+   else if(action==='downloads')new GeneratedFilePermissions(store,current).set(d.fingerprint,d.generation,b.enabled);
    else if(action==='viewer')new SharedChatPermissions(store,current).set(d.fingerprint,d.generation,b.enabled);
    else if(action==='approve'){
     new ProjectAccess(store,[directory(this.options().workspace)],current).initialize(d.fingerprint,d.generation);

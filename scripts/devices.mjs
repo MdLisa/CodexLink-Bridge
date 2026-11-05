@@ -80,12 +80,13 @@ async function main(){
   const input=await rl.question('输入设备序号（回车退出）：');if(!input.trim())return;const d=devices[Number(input)-1];if(!d)throw Error('设备序号不正确。');
   console.log(`已选择：${d.name}  核对码：${d.code}`);
   if(process.argv.includes('--approvals')){await configureApprovals(d);return;}
-  const choice=(await rl.question('核对手机上的码一致后，输入 A 批准；P 项目范围；E 操作审批；T 退出电脑端并接管；V 只读查看；N 备注；D 删除设备；R 撤销（回车取消）：')).trim().toUpperCase();
+  const choice=(await rl.question('核对手机上的码一致后，输入 A 批准；P 项目范围；E 操作审批；T 退出电脑端并接管；V 只读查看；F 文档下载；N 备注；D 删除设备；R 撤销（回车取消）：')).trim().toUpperCase();
   if(choice==='A'){await configure(d);await configureApprovals(d);security.approve(d.fingerprint,d.code,account.generation);console.log('已批准，请回手机再次点击登录。');}
   else if(choice==='P'){await configure(d);}
   else if(choice==='E'){await configureApprovals(d);}
   else if(choice==='T'){await configureTakeover(d);}
   else if(choice==='V'){await configureChatViewer(d);}
+  else if(choice==='F'){const enabled=(await rl.question('允许该手机在操作模式下载生成文档（20 MB）？输入 Y 开启，其他输入关闭：')).trim().toUpperCase()==='Y';await new Management({dir}).device('downloads',{fingerprint:d.fingerprint,generation:account.generation,enabled});console.log('文档下载权限已保存。');}
   else if(choice==='N'){const note=await rl.question('输入备注（回车清空，最多 80 字）：');await new Management({dir}).device('note',{fingerprint:d.fingerprint,generation:account.generation,note});console.log('备注已保存，仅电脑可见。');}
   else if(choice==='D'){if((await rl.question('删除登记、登录凭据和授权，保留聊天及附件。再次登录需重新批准。输入 Y 确认：')).trim().toUpperCase()!=='Y')return;await new Management({dir}).device('delete',{fingerprint:d.fingerprint,generation:account.generation});console.log('设备已删除。');}
   else if(choice==='R'){security.revoke(d.fingerprint);console.log('已撤销，该手机不能继续访问。');}

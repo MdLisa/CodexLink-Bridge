@@ -1,5 +1,6 @@
 # Install dependencies locally; commit package.json and pnpm-lock.yaml.
 node_modules/
+/.pnpm-store/
 
 # Runtime state / uploaded user attachments (also protect custom in-project data dirs)
 .bridge-data/
@@ -51,10 +52,9 @@ cert.pem
 /.cloudflared/
 /.codex/
 
-# Downloaded tools and generated artifacts; keep intended root-level APK downloads.
+# Downloaded tools and generated artifacts; APKs are distributed by the update publisher.
 /tools/cloudflared.exe
 *.apk
-!/CodexLink-*.apk
 *.aab
 *.zip
 *.7z
@@ -81,3 +81,7 @@ attachments-config.*.tmp
 /CodexLink.exe
 /updates/
 /LOCAL_DEVELOPMENT.md
+
+# Private generated document deliveries
+generated-files/
+codex-exports/

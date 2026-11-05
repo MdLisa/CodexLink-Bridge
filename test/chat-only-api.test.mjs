@@ -47,11 +47,38 @@ async function setup(t){const root=mkdtempSync(path.join(os.tmpdir(),'codex-chat
  return{root,workspace,dataDir,get service(){return service;},rpc,engines,accounts,phone,local,set,create,submit,socket,async restart(){await service.close();service=await startServer(options);}};
 }
 
-test('phone chat-only mode removes project metadata and forbids coding chats, file tools, takeover and self-upgrade',async t=>{
- const s=await setup(t),p=await s.phone(),normal=await s.phone();assert.equal((await s.set(p,'chat_only')).status,200);const status=(await p.call('/api/status')).data;assert.equal(status.approvalsReviewer,'chat_only');assert.deepEqual(status.workspaces,[]);assert.deepEqual(status.projectAccess.roots,[]);assert.equal(status.capabilities.files,false);assert.equal(status.capabilities.desktopTakeover,false);assert.ok(!JSON.stringify(status).includes(s.workspace));
- for(const [route,method,body]of [['/api/threads/coding','GET'],['/api/threads/coding/history','GET'],['/api/threads/coding/acquire','POST',{}],['/api/threads/coding/release','POST',{}],['/api/threads/coding/takeover/prepare','POST',{}],['/api/files?id='+randomUUID(),'POST',{}],['/admin/device-approvals','POST',{approvalsReviewer:'user'}]])assert.equal((await p.call(route,{method,body})).status,403,route);
+test('phone chat-only mode removes project metadata and forbids coding chats, computer tools, takeover and self-upgrade',async t=>{
+ const s=await setup(t),p=await s.phone(),normal=await s.phone();assert.equal((await s.set(p,'chat_only')).status,200);const status=(await p.call('/api/status')).data;assert.equal(status.approvalsReviewer,'chat_only');assert.deepEqual(status.workspaces,[]);assert.deepEqual(status.projectAccess.roots,[]);assert.equal(status.capabilities.files,true);assert.equal(status.capabilities.desktopTakeover,false);assert.ok(!JSON.stringify(status).includes(s.workspace));
+ for(const [route,method,body]of [['/api/threads/coding','GET'],['/api/threads/coding/history','GET'],['/api/threads/coding/acquire','POST',{}],['/api/threads/coding/release','POST',{}],['/api/threads/coding/takeover/prepare','POST',{}],['/admin/device-approvals','POST',{approvalsReviewer:'user'}]])assert.equal((await p.call(route,{method,body})).status,403,route);
  assert.equal((await p.call('/api/threads',{method:'POST',body:{name:'bad',cwd:s.workspace}})).status,400);const chat=(await s.create(p)).data;assert.equal((await s.submit(p,chat.id,'math',{config:{shell_tool:true}})).status,400);await s.submit(p,chat.id);await until(()=>s.service.store.jobs(chat.id)[0]?.state==='completed');assert.equal((await p.call(`/api/threads/${chat.id}/history`)).data.turns[0].items[1].text,'safe answer');
  assert.deepEqual((await p.call('/api/threads')).data.threads.map(c=>c.id),[chat.id]);assert.equal((await normal.call(`/api/threads/${chat.id}`)).status,403);const privateJob=s.service.store.jobs(chat.id)[0];assert.equal((await normal.call('/api/jobs/'+privateJob.id)).status,403);assert.equal((await normal.call('/api/jobs/'+privateJob.id+'/cancel',{method:'POST',body:{}})).status,403);assert.equal(s.rpc.calls.filter(c=>c.method==='turn/start').length,0);
+});
+test('chat-only file uploads are parsed, owner/mode isolated, idempotent and shown as original attachments',async t=>{
+ const s=await setup(t),a=await s.phone(),b=await s.phone(),normal=await s.phone();
+ const upload=(p,id,name,text,revision)=>p.call('/api/files?'+new URLSearchParams({id,name,mime:'text/plain',...(revision?{modeRevision:revision}:{})}),{method:'POST',bytes:Buffer.from(text)});
+ const old=randomUUID();assert.equal((await upload(a,old,'old.txt','operate private')).status,201);
+ await s.set(a,'chat_only');await s.set(b,'chat_only');const chat=(await s.create(a)).data,other=(await s.create(b)).data;
+ const revision=(await a.call('/api/status')).data.executionSettings.modeRevision,id=randomUUID();
+ assert.equal((await upload(a,id,'notes.txt','文件内容：苹果 42',revision)).status,201);
+ assert.equal((await upload(a,id,'notes.txt','文件内容：苹果 42',revision)).status,201);
+ assert.equal((await upload(a,id,'notes.txt','changed',revision)).status,400);
+ assert.equal((await upload(b,id,'notes.txt','文件内容：苹果 42')).status,403);
+ assert.equal((await s.submit(a,chat.id,'read',{fileIds:[old]})).status,403);
+ assert.equal((await s.submit(b,other.id,'steal',{fileIds:[id]})).status,403);
+ const message={messageId:randomUUID(),text:'',fileIds:[id],modeRevision:revision};
+ assert.equal((await a.call(`/api/threads/${chat.id}/messages`,{method:'POST',body:message})).status,202);
+ await until(()=>s.service.store.jobs(chat.id)[0]?.state==='completed');
+ const runtime=s.engines.find(e=>e.device.device_key===a.fingerprint).runtime;
+ assert.deepEqual(runtime.inputs[0].documents,[{name:'notes.txt',text:'文件内容：苹果 42'}]);
+ assert.equal((await a.call(`/api/threads/${chat.id}/messages`,{method:'POST',body:message})).data.duplicate,true);assert.equal(runtime.inputs.length,1);
+ const history=(await a.call(`/api/threads/${chat.id}/history`)).data,wire=JSON.stringify(history);assert.equal(history.turns[0].items[0].files[0].name,'notes.txt');assert.ok(!wire.includes('苹果 42'));assert.ok(!wire.includes(s.dataDir));
+ assert.equal((await normal.call(`/api/threads/${chat.id}/history`)).status,403);
+ assert.equal((await upload(a,randomUUID(),'unsupported.exe','MZ')).status,400);
+ assert.equal((await s.submit(a,chat.id,'too many',{fileIds:Array(9).fill(id)})).status,400);
+ await a.login();assert.equal((await s.submit(a,chat.id,'again',{fileIds:[id]})).status,202);await until(()=>s.service.store.jobs(chat.id).every(j=>j.state==='completed'));
+ await s.restart();assert.equal((await a.call(`/api/threads/${chat.id}/messages`,{method:'POST',body:message})).data.duplicate,true);
+ await s.set(a,'user');assert.equal((await s.submit(a,'coding','wrong mode',{fileIds:[id]})).status,403);
+ assert.equal((await upload(a,randomUUID(),'stale.txt','text',revision)).status,409);assert.equal(s.rpc.turns.length,0);
 });
 test('restricted chats and images belong to one device and mode, survive relogin and cannot reuse coding uploads',async t=>{
  const s=await setup(t),a=await s.phone(),b=await s.phone();const png=Buffer.from([137,80,78,71,13,10,26,10,...Array(20).fill(0)]);const old=(await a.call('/api/uploads',{method:'POST',bytes:png})).data;await s.set(a,'chat_only');await s.set(b,'chat_only');const chat=(await s.create(a)).data;

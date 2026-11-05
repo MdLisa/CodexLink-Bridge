@@ -31,14 +31,14 @@ export class DeviceSecurity{
   try{
    this.db.prepare("UPDATE jobs SET state='cancelled',error='设备已删除，排队任务已取消。',updated_at=? WHERE device_key=? AND state='queued'").run(new Date().toISOString(),fingerprint);
    this.db.prepare('DELETE FROM devices WHERE device_key=?').run(fingerprint);
-   for(const table of ['device_notes','device_project_access','device_approvals','device_takeover','device_chat_viewer'])if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))this.db.prepare('DELETE FROM '+table+' WHERE fingerprint=?').run(fingerprint);
+   for(const table of ['device_notes','device_project_access','device_approvals','device_takeover','device_chat_viewer','device_generated_files'])if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))this.db.prepare('DELETE FROM '+table+' WHERE fingerprint=?').run(fingerprint);
    this.db.prepare('DELETE FROM trusted_devices WHERE fingerprint=?').run(fingerprint);
    // Keep replay proofs until their normal expiry, and retain chat/attachment ownership.
    this.db.exec('COMMIT');
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  approve(fingerprint,code,generation){const r=this.lookup(fingerprint);if(!r||r.generation!==generation||code.toUpperCase().replaceAll('-','')!==this.code(fingerprint).replaceAll('-',''))throw Error('核对码不匹配或请求已失效，没有批准。');this.db.prepare("UPDATE trusted_devices SET status='approved' WHERE fingerprint=?").run(fingerprint);}
- revoke(fingerprint){this.db.prepare("UPDATE trusted_devices SET status='revoked' WHERE fingerprint=?").run(fingerprint);this.db.prepare('UPDATE devices SET revoked_at=? WHERE device_key=?').run(new Date().toISOString(),fingerprint);if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_chat_viewer'").get())this.db.prepare('DELETE FROM device_chat_viewer WHERE fingerprint=?').run(fingerprint);}
+ revoke(fingerprint){if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_generated_files'").get())this.db.prepare('DELETE FROM device_generated_files WHERE fingerprint=?').run(fingerprint);this.db.prepare("UPDATE trusted_devices SET status='revoked' WHERE fingerprint=?").run(fingerprint);this.db.prepare('UPDATE devices SET revoked_at=? WHERE device_key=?').run(new Date().toISOString(),fingerprint);if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_chat_viewer'").get())this.db.prepare('DELETE FROM device_chat_viewer WHERE fingerprint=?').run(fingerprint);}
  proof(encoded,{signature,...data}){
   const p=this.publicKey(encoded),time=Number(data.time),nonce=data.nonce;
   if(!Number.isSafeInteger(time)||Math.abs(Date.now()-time)>180000)throw deny('手机时间与电脑相差较大，请打开系统自动时间后重试。');

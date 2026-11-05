@@ -84,6 +84,15 @@ test('old backend features fail clearly without bypassing the live backend',asyn
  saveJson(s.dir,'runtime.json',{address:'http://127.0.0.1:'+server.address().port,instanceId,adminToken:'local-test-admin',roots:[s.workspace]});
  await assert.rejects(()=>s.management.action('device.note',{fingerprint:s.d.fingerprint,generation:s.account.generation,note:'must not save'}),/旧版后台/);assert.equal(s.management.devices()[0].note,'');
 });
+test('document download grants default off, persist in device management and disappear on deletion',async t=>{
+ const s=await fixture(t),data={fingerprint:s.d.fingerprint,generation:s.account.generation};
+ assert.equal(s.management.devices()[0].downloads,false);
+ await s.management.action('device.approve',{...data,code:s.management.devices()[0].code});
+ await s.management.action('device.downloads',{...data,enabled:true});assert.equal(s.management.devices()[0].downloads,true);
+ await assert.rejects(()=>s.management.action('device.downloads',{...data,enabled:'true'}),/权限设置无效/);
+ await s.management.action('device.delete',data);assert.deepEqual(s.management.devices(),[]);
+ const store=new Store(s.dir);try{assert.equal(store.db.prepare('SELECT * FROM device_generated_files WHERE fingerprint=?').get(s.d.fingerprint),undefined);}finally{store.close();}
+});
 class Rpc extends EventEmitter{async start(){}async close(){this.emit('disconnected');}async request(method,p){if(method==='thread/read'){await this.gate?.();return{thread:{id:p.threadId,cwd:this.cwd}};}return{data:[]};}}
 test('saving a chat-only phone default isolates new phones and preserves existing modes across restart',async t=>{
  const s=await fixture(t),data={fingerprint:s.d.fingerprint,generation:s.account.generation};await s.management.action('device.approve',{...data,code:s.management.devices()[0].code});
@@ -93,7 +102,7 @@ test('saving a chat-only phone default isolates new phones and preserves existin
  const key=identity(),phone=service.security.enroll(key.publicKey,'new chat phone',s.account.generation);
  await s.management.action('device.approve',{fingerprint:phone.fingerprint,generation:s.account.generation,code:service.security.code(phone.fingerprint)});
  async function status(signer){const body=Buffer.from(JSON.stringify({username:'owner',password:'management-test-password',deviceName:'phone',publicKey:signer.publicKey}));const login=await fetch(service.address+'/api/login',{method:'POST',headers:{...headers(signer,service.address,'POST','/api/login',body,''),'content-type':'application/json'},body});assert.equal(login.status,201);const {token}=await login.json();return(await fetch(service.address+'/api/status',{headers:{...headers(signer,service.address,'GET','/api/status',Buffer.alloc(0),token),authorization:'Bearer '+token}})).json();}
- const check=async()=>{const next=await status(key),existing=await status(s.key);assert.equal(next.executionSettings.approvalsReviewer,'chat_only');assert.deepEqual(next.workspaces,[]);assert.equal(next.capabilities.files,false);assert.equal(existing.executionSettings.approvalsReviewer,'user');assert.equal(service.bridge.reviewSettings().approvalsReviewer,'user');};
+ const check=async()=>{const next=await status(key),existing=await status(s.key);assert.equal(next.executionSettings.approvalsReviewer,'chat_only');assert.deepEqual(next.workspaces,[]);assert.equal(next.capabilities.files,true);assert.equal(existing.executionSettings.approvalsReviewer,'user');assert.equal(service.bridge.reviewSettings().approvalsReviewer,'user');};
  await check();await service.close();service=await startServer({port:0,dataDir:s.dir,roots:[s.workspace],rpc:new Rpc()});await check();
 });
 test('online management invalidates old HTTP and socket sessions; re-enrollment needs approval',async t=>{
